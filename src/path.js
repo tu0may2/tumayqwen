@@ -38,6 +38,10 @@ export function neighbors(world, x, y, cb) {
       const nx = x + dx;
       if (world.solid(nx, y)) continue;
       if (world.standable(nx, y) || world.climbable(nx, y)) { cb(nx, y, 1); continue; }
+      // подъём на ступеньку в один тайл — как дупликанты в ONI
+      if (world.solid(nx, y) && !world.solid(nx, y - 1) && !world.solid(x, y - 1)
+          && (world.standable(nx, y - 1) || world.climbable(nx, y - 1))) { cb(nx, y - 1, 1.4); continue; }
+      if (world.solid(nx, y)) continue;
       // шаг в пустоту: падаем, если внизу есть куда приземлиться
       let fy = y;
       while (fy - y < 8 && !world.solid(nx, fy + 1) && !world.standable(nx, fy + 1)) fy++;

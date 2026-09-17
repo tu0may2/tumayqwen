@@ -1,9 +1,10 @@
 // Дупликант: потребности, характер, навыки и исполнение задач.
 import { W, BREATH_MIN, BUILDINGS } from './world.js';
 import { findPath, accessCells } from './path.js';
-import { JOB_LABEL, storageFor, findResource } from './jobs.js';
+import { JOB_LABEL, storageFor, findResource, reachableResource, reachableStorage } from './jobs.js';
 import { randomName, pick, clamp } from './util.js';
 import { PLANTS } from './plants.js';
+import { THOUGHTS, relationLabel } from './social.js';
 
 export const TRAITS = [
   { key: 'strong',   name: 'Силач',        desc: '+40% к копанию',            mod: p => p.skills.dig += 0.4 },
@@ -35,15 +36,25 @@ export class Pawn {
     this.bladder = 0; this.hygiene = 100; this.fun = 70;
     this.germs = { slimelung: 0, food: 0 };
     this.sick = null;
+    this.suitO2 = 0;      // запас кислорода в скафандре
+    this.memories = [];   // временные впечатления (как мысли в RimWorld)
+    this.rel = new Map(); // мнения о других колонистах
+    this.diet = [];       // что ел в последнее время
+    this.passions = {};   // увлечения: ускоряют рост навыка
     this.mood = 100; this.moodFactors = [];
     this.carry = null; this.task = 'idle'; this.facing = 1; this.anim = 0;
     this.disabled = {};
+    this.prio = {};        // тип работы -> 0 (выкл) … 5 (срочно), по умолчанию 3
     this.bed = null; this.breaking = false; this.retryAt = 0;
     this.traits = [];
     const pool = [...TRAITS];
     for (let i = 0; i < 2; i++) {
       const t = pool.splice(Math.floor(rng() * pool.length), 1)[0];
       this.traits.push(t); t.mod(this);
+    }
+    for (const sk of ['dig', 'build', 'farm', 'haul']) {
+      const r = rng();
+      this.passions[sk] = r > 0.82 ? 2 : r > 0.62 ? 1 : 0;   // 2 — страсть, 1 — интерес
     }
     this.color = `hsl(${Math.floor(rng() * 360)},55%,62%)`;
   }
@@ -59,6 +70,9 @@ export class Pawn {
     if (submerged) {
       this.oxygen -= (14 / this.lungs) * dt;          // тонет
       this.health -= 1.5 * dt;
+    } else if (this.suitO2 > 0 && o2 <= BREATH_MIN) {
+      this.suitO2 = Math.max(0, this.suitO2 - 3 * dt);   // дышим из баллона
+      this.oxygen = Math.min(100, this.oxygen + 20 * dt);
     } else if (o2 > BREATH_MIN) {
       world.o2[i] = Math.max(0, o2 - 0.0009 * dt * 60 * 0.2);
       world.co2[i] += 0.0006 * dt * 60 * 0.2;
@@ -67,9 +81,20 @@ export class Pawn {
       this.oxygen -= (8 / this.lungs) * dt;
     }
 
+    // дозаправка скафандра у дока
+    if (this.suitO2 < 100) {
+      for (const st of world.allAt(this.x, this.y).concat(world.allAt(this.x + 1, this.y), world.allAt(this.x - 1, this.y))) {
+        if (!st.built || !st.def.suit || !st.powered || (st.store.o2 || 0) <= 0.01) continue;
+        const take = Math.min(st.store.o2, 0.02 * dt * 60);
+        st.store.o2 -= take;
+        this.suitO2 = Math.min(100, this.suitO2 + take * 120);
+        break;
+      }
+    }
+
     // температура: перегрев и переохлаждение
     const T = world.temp[i];
-    if (T > 40) this.health -= (T - 40) * 0.05 * dt;
+    if (T > 40) { this.health -= (T - 40) * 0.05 * dt; if (T > 70) this.remember('scalded'); }
     if (T < -5) this.health -= (-5 - T) * 0.05 * dt;
     if (this.health < 100) this.health = Math.min(100, this.health + (this.task === 'sleep' ? 1.2 : 0.35) * dt);
     this.calories -= (this.task === 'sleep' ? 0.9 : 1.8) * this.appetite * dt;
@@ -102,6 +127,11 @@ export class Pawn {
         this.germs[this.sick.type] = 0;
         game.alert(`${this.name} выздоровел.`, true);
         this.sick = null;
+    this.suitO2 = 0;      // запас кислорода в скафандре
+    this.memories = [];   // временные впечатления (как мысли в RimWorld)
+    this.rel = new Map(); // мнения о других колонистах
+    this.diet = [];       // что ел в последнее время
+    this.passions = {};   // увлечения: ускоряют рост навыка
       }
     }
 
@@ -135,6 +165,21 @@ export class Pawn {
     if (this.hygiene < 35) f.push(['Грязный', -8]);
     if (this.fun < 25) f.push(['Скука', -14]); else if (this.fun > 75) f.push(['Отдохнул', +8]);
     if (game.decor > 0) f.push(['Обжитая база', +Math.min(12, game.decor)]);
+    const room = game.roomOf(this.x, this.y);
+    if (room) f.push([room.name, room.bonus]);
+    // воспоминания и отношения
+    for (const m of this.memories) m.left -= dt;
+    this.memories = this.memories.filter(m => m.left > 0);
+    for (const m of this.memories) f.push([m.text, m.value]);
+    let social = 0;
+    for (const q of game.pawns) {
+      if (q === this) continue;
+      const op = this.opinion(q);
+      if (Math.abs(op) < 20) continue;
+      if (Math.abs(q.x - this.x) + Math.abs(q.y - this.y) < 8) social += op > 0 ? 4 : -4;
+    }
+    if (social) f.push([social > 0 ? 'Рядом друзья' : 'Рядом неприятные люди', Math.max(-12, Math.min(12, social))]);
+
     this.moodFactors = f;
     const target = clamp(100 + f.reduce((a, b) => a + b[1], 0), 0, 100);
     this.mood += (target - this.mood) * Math.min(1, dt * 0.35);
@@ -143,7 +188,17 @@ export class Pawn {
     this.stress = clamp(this.stress + stressPush * dt, 0, 100);
     if (this.stress >= 99 && !this.breaking) {
       this.breaking = true; this.dropJob(game);
-      game.alert(`${this.name}: нервный срыв!`);
+      const kinds = ['destructive', 'sulk', 'binge'];
+      this.breakKind = kinds[Math.floor(Math.random() * kinds.length)];
+      const what = { destructive: 'крушит постройки', sulk: 'сидит и плачет', binge: 'заедает стресс' }[this.breakKind];
+      game.alert(`${this.name}: нервный срыв — ${what}!`);
+      if (this.breakKind === 'destructive') {
+        const near = [...world.bdata.values()].filter(st => st.built && !st.def.conduit
+          && Math.abs(st.x - this.x) + Math.abs(st.y - this.y) < 6);
+        const victim = near[Math.floor(Math.random() * near.length)];
+        if (victim) world.removeBuilding(victim.x, victim.y, victim.layer);
+      }
+      if (this.breakKind === 'binge') this.calories = Math.max(0, this.calories - 600);
     }
     if (this.breaking && this.stress < 55) { this.breaking = false; game.alert(`${this.name} успокоился.`, true); }
 
@@ -162,7 +217,12 @@ export class Pawn {
   think(world, game) {
     if (this.plan.length) return;
 
-    if (this.breaking) { this.wander(world); this.task = 'idle'; return; }
+    if (this.breaking) {
+      if (this.breakKind !== 'sulk') this.wander(world);
+      this.stress = Math.max(0, this.stress - 1.2 * 0.016);
+      this.task = 'idle';
+      return;
+    }
 
     // 0. выбраться из воды
     if (world.water[this.idx] > 300) { if (this.planEscapeWater(world)) { this.task = 'breathe'; return; } }
@@ -170,11 +230,16 @@ export class Pawn {
     if (this.oxygen < 45) { if (this.planBreathe(world)) { this.task = 'breathe'; return; } }
     // 2. еда
     if (this.calories < 1500) { if (this.planEat(world, game)) { this.task = 'eat'; return; } }
-    // 3. сон
-    const night = game.cycleT > 0.75;
-    if (this.stamina < 18 || (night && this.stamina < 65)) {
+    // 3. расписание: сон, гигиена, досуг
+    const block = game.schedule.at(game.cycleT);
+    if (this.stamina < 18 || (block === 'sleep' && this.stamina < 92)) {
       if (this.planSleep(world, game)) { this.task = 'sleep'; return; }
     }
+    if (block === 'bath' && (this.hygiene < 90 || this.bladder > 40)) {
+      if (this.bladder > 40 && this.planUse(world, game, 'toilet')) { this.task = 'toilet'; return; }
+      if (this.planUse(world, game, 'wash')) { this.task = 'wash'; return; }
+    }
+    if (block === 'rec' && this.fun < 85 && this.planUse(world, game, 'fun')) { this.task = 'fun'; return; }
     // 3.5 личные нужды: уборная, гигиена, лечение, досуг
     if (this.bladder > 75 && this.planUse(world, game, 'toilet')) { this.task = 'toilet'; return; }
     if (this.hygiene < 40 && this.planUse(world, game, 'wash')) { this.task = 'wash'; return; }
@@ -240,19 +305,27 @@ export class Pawn {
   }
 
   planEat(world, game) {
-    const src = findResource(world, 'food', this);
-    if (!src) return false;
-    const steps = [{ go: null, goals: accessCells(world, src.x, src.y) },
-      { act: () => { this.takeFrom(world, src, 'food', 1000); return true; } }];
+    const found = reachableResource(world, 'meal', this) || reachableResource(world, 'food', this);
+    if (!found) return false;
+    const src = found.src, res = (src.from ? src.from.store.meal : world.items.get(src.pileIdx)?.meal) ? 'meal' : 'food';
+    const steps = [{ go: found.path },
+      { act: () => { this.takeFrom(world, src, res, 1000); return true; } }];
     // поесть за столом, если он есть и рядом
     const table = game.findBuilding('table', this);
     if (table) steps.push({ go: null, goals: accessCells(world, table.x, table.y) });
     steps.push({ act: (dt) => {
       if (!this.carry) return true;
+      const quality = this.carry.res === 'meal' ? 1.35 : 1;
       const bite = Math.min(this.carry.amt, 900 * dt);
-      this.carry.amt -= bite; this.calories = Math.min(this.maxCalories, this.calories + bite);
+      this.carry.amt -= bite;
+      this.calories = Math.min(this.maxCalories, this.calories + bite * quality);
+      if (this.carry.res === 'food' && world.germs[this.idx] > 50) this.germs.food += 0.02 * dt;
       if (this.carry.amt <= 0.01 || this.calories >= this.maxCalories - 10) {
-        if (this.carry.amt > 0.01) world.addItem(this.x, this.y, 'food', this.carry.amt);
+        this.diet.push(this.carry.res);
+        if (this.diet.length > 4) this.diet.shift();
+        if (this.carry.res === 'meal') this.remember('ateGood');
+        if (this.diet.length >= 4 && this.diet.every(d => d === this.diet[0])) this.remember('ateSame');
+        if (this.carry.amt > 0.01) world.addItem(this.x, this.y, this.carry.res, this.carry.amt);
         this.carry = null; return true;
       }
       return false;
@@ -267,11 +340,15 @@ export class Pawn {
     if (goals) {
       const p = findPath(world, this.x, this.y, goals);
       if (p) {
-        this.plan = [{ go: p }, { act: () => this.stamina > 97, label: 'sleep' }];
+        this.plan = [{ go: p }, { act: () => { if (this.stamina > 97) { this.remember('slept'); return true; } return false; }, label: 'sleep' }];
         return true;
       }
     }
-    if (this.stamina < 6) { this.plan = [{ act: () => this.stamina > 60, label: 'sleep' }]; return true; }
+    if (this.stamina < 6) {
+      this.remember('sleptFloor');
+      this.plan = [{ act: () => this.stamina > 60, label: 'sleep' }];
+      return true;
+    }
     return false;
   }
 
@@ -336,16 +413,17 @@ export class Pawn {
     const steps = [];
     if (job.type === 'supply' || job.type === 'haul') {
       if (job.type === 'haul') {
-        const bin = storageFor(world, job.res);
+        const target = reachableStorage(world, job.res, this);
+        if (!target) { game.board.postpone(job, game.time + 20); this.dropJob(game); return; }
         steps.push({ go: path });
         steps.push({ act: () => { this.takeFrom(world, { x: job.x, y: job.y, pileIdx: job.y * W + job.x }, job.res, 100); return true; } });
-        if (!bin) { this.plan = steps; return; }
-        steps.push({ goals: accessCells(world, bin.x, bin.y) });
-        steps.push({ act: () => { this.deposit(world, bin); return true; } });
+        steps.push({ goals: accessCells(world, target.bin.x, target.bin.y) });
+        steps.push({ act: () => { this.deposit(world, target.bin); return true; } });
       } else {
-        const src = findResource(world, job.res, this);
-        if (!src) { this.dropJob(game); return; }
-        steps.push({ goals: accessCells(world, src.x, src.y) });
+        const found = reachableResource(world, job.res, this);
+        if (!found) { game.board.postpone(job, game.time + 20); this.dropJob(game); return; }
+        const src = found.src;
+        steps.push({ go: found.path });
         steps.push({ act: () => { this.takeFrom(world, src, job.res, job.amount); return true; } });
         steps.push({ goals: accessCells(world, job.x, job.y) });
         steps.push({ act: () => { this.deliverToSite(world, job); return true; } });
@@ -440,9 +518,29 @@ export class Pawn {
     this.plan = steps;
   }
 
-  workRate(skill) { return this.skills[skill] * this.workMul * (0.6 + this.mood / 250); }
+  prioOf(type) { return this.prio[type] ?? 3; }
+
+  // --- социальное -----------------------------------------------------------
+  opinion(other) { return this.rel.get(other.id) || 0; }
+  addOpinion(other, d) {
+    this.rel.set(other.id, Math.max(-100, Math.min(100, this.opinion(other) + d)));
+  }
+  relationTo(other) { return relationLabel(this.opinion(other)); }
+
+  remember(key) {
+    const t = THOUGHTS[key];
+    if (!t) return;
+    const old = this.memories.find(m => m.key === key);
+    if (old) { old.left = t.dur; return; }
+    this.memories.push({ key, text: t.text, value: t.value, left: t.dur });
+  }
+
+  workRate(skill) {
+    const passion = 1 + (this.passions[skill] || 0) * 0.12;
+    return this.skills[skill] * this.workMul * passion * (0.6 + this.mood / 250);
+  }
   gain(skill, dt) {
-    this.xp[skill] += dt;
+    this.xp[skill] += dt * (1 + (this.passions[skill] || 0) * 0.6);
     const lvl = 1 + Math.sqrt(this.xp[skill]) * 0.22;
     this.skills[skill] = Math.max(this.skills[skill], lvl);
   }
@@ -502,7 +600,11 @@ export class Pawn {
 
     if (step.goals && !step.go) {
       const p = findPath(world, this.x, this.y, step.goals);
-      if (!p) { this.dropJob(game); this.retryAt = game.time + 1.5; return; }
+      if (!p) {
+        game.board.postpone(this.job, game.time + 15);
+        this.dropJob(game); this.retryAt = game.time + 1;
+        return;
+      }
       step.go = p;
     }
     if (step.go) {
@@ -522,7 +624,14 @@ export class Pawn {
 
   /** Гравитация и сглаживание позиции, когда дупликант не идёт. */
   settle(world, dt) {
-    if (!world.standable(this.x, this.y) && !world.solid(this.x, this.y + 1)) this.y++;
+    if (!world.standable(this.x, this.y) && !world.solid(this.x, this.y + 1)) {
+      this.y++;
+      this.fallFrom = this.fallFrom ?? this.y - 1;
+    } else if (this.fallFrom !== undefined) {
+      const h = this.y - this.fallFrom;
+      if (h > 4) { this.health -= (h - 4) * 7; this.remember('fell'); }
+      this.fallFrom = undefined;
+    }
     this.px += (this.x - this.px) * Math.min(1, dt * 12);
     this.py += (this.y - this.py) * Math.min(1, dt * 12);
   }
@@ -535,13 +644,16 @@ export class Pawn {
     const d = Math.hypot(dx, dy);
     const climbing = world.climbable(this.x, this.y) || world.climbable(n.x, n.y);
     const v = this.speed * (climbing && Math.abs(dy) > 0.1 ? 0.65 : 1) * (this.mood < 35 ? 0.8 : 1);
-    if (d < 0.08) {
+    const stepLen = v * dt;
+    if (d <= stepLen + 1e-4) {            // доходим ровно до узла, без «перелёта»
       this.px = n.x; this.py = n.y; this.x = n.x; this.y = n.y;
       path.shift();
+      if (Math.abs(dx) > 0.05) this.facing = dx > 0 ? 1 : -1;
+      this.anim += dt * 9;
       return path.length === 0;
     }
-    this.px += (dx / d) * v * dt;
-    this.py += (dy / d) * v * dt;
+    this.px += (dx / d) * stepLen;
+    this.py += (dy / d) * stepLen;
     if (Math.abs(dx) > 0.05) this.facing = dx > 0 ? 1 : -1;
     this.x = Math.round(this.px); this.y = Math.round(this.py);
     this.anim += dt * 9;

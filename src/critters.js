@@ -69,10 +69,26 @@ export class Critter {
       }
     }
 
+    // кормушка: прирученные звери едят из неё и дают больше продукта
+    if (!this.def.gas) {
+      for (const [, st] of world.bdata) {
+        if (!st.built || !st.def.feeder) continue;
+        if (Math.abs(st.x - this.x) + Math.abs(st.y - this.y) > 4) continue;
+        const food = st.store[st.def.uses] || 0;
+        if (food <= 0) continue;
+        const eat = Math.min(food, this.def.eatRate * dt);
+        st.store[st.def.uses] -= eat;
+        this.hunger = Math.min(this.def.hungerMax, this.hunger + eat * 25);
+        this.digest += eat * 1.5;
+        this.tame = Math.min(1, this.tame + 0.02 * dt);
+        break;
+      }
+    }
+
     // продукт жизнедеятельности
     if (this.digest > 12) {
       this.digest = 0;
-      if (this.def.drops) world.addItem(this.x, this.y, this.def.drops, this.def.dropAmt);
+      if (this.def.drops) world.addItem(this.x, this.y, this.def.drops, this.def.dropAmt * (1 + this.tame));
     }
 
     // размножение

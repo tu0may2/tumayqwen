@@ -16,6 +16,8 @@
     <div class="clock">
       <div class="cycle" id="cycle">Цикл 1</div>
       <div class="speeds">
+        <button id="btn-save" class="spd" title="Сохранить">💾</button>
+        <button id="btn-load" class="spd" title="Загрузить">📂</button>
         <button data-speed="0" class="spd" title="Пауза (Space)">❚❚</button>
         <button data-speed="1" class="spd active">▶</button>
         <button data-speed="2" class="spd">▶▶</button>
@@ -28,6 +30,11 @@
     <div class="panel" id="inspector">
       <div class="panel-title">Инспектор</div>
       <div class="panel-body" id="inspector-body">Наведите курсор на тайл.</div>
+    </div>
+    <div class="panel" id="schedulep">
+      <div class="panel-title">Расписание цикла</div>
+      <div class="panel-body"><div id="schedule-strip" class="sched"></div>
+        <div class="hint2">Клик по отрезку меняет режим: работа → досуг → гигиена → сон</div></div>
     </div>
     <div class="panel" id="researchp">
       <div class="panel-title">Исследования</div>
@@ -54,6 +61,7 @@
     <button data-ov="power" class="ov">Энергия</button>
     <button data-ov="germs" class="ov">Микробы</button>
     <button data-ov="light" class="ov">Свет</button>
+    <button data-ov="rooms" class="ov">Комнаты</button>
   </div>
 </div>
 <script type="module" src="src/main.js"></script>

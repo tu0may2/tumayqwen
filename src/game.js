@@ -3,10 +3,13 @@ import { World, W, H, BUILDINGS, B_BY_KEY, RESOURCES } from './world.js';
 import { stepFluids, stepLight, LIQ_FULL } from './fluid.js';
 import { JobBoard, countResource } from './jobs.js';
 import { Networks } from './network.js';
-import { updatePower, updateMachines } from './machines.js';
+import { updatePower, updateMachines, updateAutomation } from './machines.js';
 import { Pawn } from './pawn.js';
 import { makeRNG } from './util.js';
 import { Research } from './research.js';
+import { Schedule } from './schedule.js';
+import { findRooms, roomAt } from './rooms.js';
+import { stepSocial } from './social.js';
 import { PLANTS, chooseCrop, checkPlant } from './plants.js';
 import { populate } from './critters.js';
 
@@ -25,6 +28,8 @@ export class Game {
     this.power = { gen: 0, demand: 0, deficit: 0, stored: 0, cap: 0 };
     this.nets = new Networks();
     this.research = new Research(this);
+    this.schedule = new Schedule();
+    this.rooms = []; this.roomsAt = 0;
     this.world.netDirty = true;
     this.rebuildAt = 0; this.gameOver = false;
 
@@ -61,6 +66,7 @@ export class Game {
     this.pawns = this.pawns.filter(p => p !== pawn);
     if (pawn.bed) pawn.bed.owner = null;
     this.alert(`${pawn.name} ${cause}.`);
+    for (const p of this.pawns) if (p.opinion(pawn) > 20) p.remember('friendDied');
     if (!this.pawns.length) { this.gameOver = true; this.speed = 0; this.alert('Колония погибла. F5 — новая попытка.'); }
   }
 
@@ -89,7 +95,10 @@ export class Game {
   // -------------------------------------------------------------- устройства
   updateBuildings(dt) {
     if (this.world.netDirty) this.nets.rebuild(this.world);
+    updateAutomation(this.world, this.nets, dt);
+    const burnedBefore = this.power.burned || 0;
     updatePower(this.world, this.nets, dt, this.power);
+    if ((this.power.burned || 0) > burnedBefore) this.alert('Провод перегорел от перегрузки!');
     updateMachines(this.world, this.nets, this, dt);
 
     this.decor = 0;
@@ -97,6 +106,14 @@ export class Game {
       if (!st.built) continue;
       const i = this.world.idx(st.x, st.y);
       if (st.def.decor) this.decor += st.def.decor * 0.4;
+      // перегрев: машина в жаре ломается и требует ремонта
+      if (st.def.power && this.world.temp[i] > 75) {
+        st.overheat = (st.overheat || 0) + dt;
+        if (st.overheat > 20) {
+          st.overheat = 0; st.built = false; st.prog = st.def.work * 0.4;
+          this.alert(`${st.def.name} вышел из строя от перегрева.`);
+        }
+      } else st.overheat = 0;
       if (st.def.farm && st.planted && st.growth < 1) {
         if (!st.plant) st.plant = chooseCrop(this.world, i);
         const c = checkPlant(this.world, st, i);
@@ -137,8 +154,15 @@ export class Game {
 
     this.updateBuildings(dt);
 
+    if (this.time > this.roomsAt) {
+      for (const [, st] of this.world.bdata) st.room = null;
+      this.rooms = findRooms(this.world);
+      this.roomsAt = this.time + 5;
+      this.spoilFood(5);
+    }
     if (this.time > this.rebuildAt) { this.board.rebuild(this.world, this); this.rebuildAt = this.time + 0.7; }
     for (const p of [...this.pawns]) p.update(this.world, this, dt);
+    stepSocial(this, dt);
     for (const c of this.critters) c.update(this.world, this, dt);
     if (this.critters.some(c => c.dead)) this.critters = this.critters.filter(c => !c.dead);
   }
@@ -161,8 +185,68 @@ export class Game {
     }
   }
 
+  /** Еда на полу портится; в работающем холодильнике — нет. */
+  spoilFood(dt) {
+    const w = this.world;
+    for (const [i, pile] of [...w.items]) {
+      for (const res of ['food', 'meal']) {
+        if (!pile[res]) continue;
+        const loss = pile[res] * 0.00006 * dt;   // ~3.5% за цикл на полу
+        pile[res] -= loss;
+        w.germs[i] += loss * 2;
+        if (loss > 0.5) w.addItem(i % W, (i / W) | 0, 'pdirt', loss * 0.2);
+        if (pile[res] <= 0.01) delete pile[res];
+      }
+      if (!Object.keys(pile).length) w.items.delete(i);
+    }
+    for (const [, st] of w.bdata) {
+      if (!st.built || st.def.store !== 'food') continue;
+      if (st.chilled) continue;                       // холодильник под током
+      for (const res of ['food', 'meal']) {
+        if (!st.store[res]) continue;
+        st.store[res] *= 1 - 0.00002 * dt;       // в тёплом шкафу портится медленно
+        if (st.store[res] < 0.01) delete st.store[res];
+      }
+    }
+  }
+
+  roomOf(x, y) { return roomAt(this.rooms, x, y); }
+
+  /** Случайные события: как у рассказчика в RimWorld, но по-астероидному. */
+  rollEvent() {
+    const r = this.rng();
+    const w = this.world;
+    if (r < 0.18) {
+      // извержение: один из гейзеров просыпается надолго
+      const v = w.vents[Math.floor(this.rng() * w.vents.length)];
+      if (v) { v.active = true; v.t = 0; v.rate *= 1.8; this.alert(`Извержение ${v.type}-жерла на ${v.x},${v.y}!`); }
+    } else if (r < 0.34) {
+      // вспышка болезни: споры в воздухе базы
+      const s = w.start, i = w.idx(s.x, s.y);
+      w.germs[i] += 800;
+      this.alert('Вспышка спор в базе — проветривайте и мойтесь!');
+    } else if (r < 0.5) {
+      // метеоритный дождь по поверхности
+      for (let n = 0; n < 12; n++) {
+        const x = 2 + Math.floor(this.rng() * (W - 4));
+        for (let y = 1; y < H - 2; y++) {
+          const i = w.idx(x, y);
+          if (!w.mat[i]) continue;
+          w.mat[i] = 0; w.addItem(x, y, 'copper', 12); w.temp[i] += 120;
+          break;
+        }
+      }
+      this.alert('Метеоритный дождь! На поверхности появились обломки.');
+    } else if (r < 0.62 && this.pawns.length < 12) {
+      const s = this.world.start;
+      const p = this.spawnPawn(s.x, s.y);
+      this.alert(`К шлюзу прибился скиталец: ${p.name}.`, true);
+    }
+  }
+
   onNewCycle() {
     this.alert(`Начался цикл ${this.cycle}.`, true);
+    if (this.cycle > 2) this.rollEvent();
     // «печатный под»: новобранец раз в 3 цикла, если есть еда
     if (this.cycle % 3 === 0 && this.pawns.length < 12 && this.stock('food') > 1500) {
       const s = this.world.start;

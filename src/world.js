@@ -35,7 +35,7 @@ export const RESOURCES = {
 export { BUILDINGS, B_BY_KEY, CAT } from './buildings.js';
 import { BUILDINGS, B_BY_KEY } from './buildings.js';
 
-export const LAYER = { power: 1, liquid: 2, gas: 3 };
+export const LAYER = { power: 1, liquid: 2, gas: 3, auto: 4 };
 export const GAS_CAP = 2.2;      // кг/тайл — «комфортное» давление
 export const BREATH_MIN = 0.12;  // ниже этого дупликант задыхается
 
@@ -52,6 +52,7 @@ export class World {
       power: new Uint8Array(W * H),
       liquid: new Uint8Array(W * H),
       gas: new Uint8Array(W * H),
+      auto: new Uint8Array(W * H),
     };
     this.bdata = new Map();                 // key(x,y,layer) -> состояние постройки
     this.items = new Map();                 // idx -> {res: кг}
@@ -70,7 +71,7 @@ export class World {
 
   idx(x, y) { return y * W + x; }
   /** Ключ в bdata: слой 0 — здание, 1/2/3 — провод/труба/вентиляция. */
-  key(x, y, layer = 0) { return (y * W + x) * 4 + layer; }
+  key(x, y, layer = 0) { return (y * W + x) * 8 + layer; }
   static layerOf(def) { return def.conduit ? LAYER[def.conduit] : 0; }
   stateAt(x, y, layer = 0) { return this.bdata.get(this.key(x, y, layer)) || null; }
   inside(x, y) { return x >= 0 && y >= 0 && x < W && y < H; }
@@ -81,7 +82,7 @@ export class World {
   /** Все постройки тайла по слоям. */
   allAt(x, y) {
     const out = [];
-    for (let l = 0; l < 4; l++) { const st = this.bdata.get(this.key(x, y, l)); if (st) out.push(st); }
+    for (let l = 0; l < 5; l++) { const st = this.bdata.get(this.key(x, y, l)); if (st) out.push(st); }
     return out;
   }
 
@@ -90,7 +91,7 @@ export class World {
     if (this.mat[i]) return true;
     const b = BUILDINGS[this.bid[i]];
     if (!b || (!b.solid && !b.door)) return false;
-    const st = this.bdata.get(i * 4);
+    const st = this.bdata.get(i * 8);
     return !!(st && st.built);
   }
 
@@ -100,7 +101,7 @@ export class World {
     const i = y * W + x;
     if (this.mat[i]) return true;
     const b = BUILDINGS[this.bid[i]];
-    const st = this.bdata.get(i * 4);
+    const st = this.bdata.get(i * 8);
     return !!(b && b.solid && st && st.built);
   }
 
@@ -108,15 +109,15 @@ export class World {
   standable(x, y) {
     if (this.solid(x, y)) return false;
     const b = BUILDINGS[this.bid[y * W + x]];
-    const st = this.bdata.get((y * W + x) * 4);
+    const st = this.bdata.get((y * W + x) * 8);
     if (b && b.climb && st && st.built) return true;
     if (this.solid(x, y + 1)) return true;
-    const bb = BUILDINGS[this.bid[(y + 1) * W + x]] , bs = this.bdata.get(((y + 1) * W + x) * 4);
+    const bb = BUILDINGS[this.bid[(y + 1) * W + x]] , bs = this.bdata.get(((y + 1) * W + x) * 8);
     return !!(bb && (bb.floor || bb.climb) && bs && bs.built);
   }
 
   climbable(x, y) {
-    const b = BUILDINGS[this.bid[y * W + x]], st = this.bdata.get((y * W + x) * 4);
+    const b = BUILDINGS[this.bid[y * W + x]], st = this.bdata.get((y * W + x) * 8);
     return !!(b && b.climb && st && st.built);
   }
 

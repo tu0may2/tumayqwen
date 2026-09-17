@@ -2,6 +2,7 @@
 import { W, H, TILE, MATS, BUILDINGS, GAS_CAP, RESOURCES } from './world.js';
 import { LIQ_FULL } from './fluid.js';
 import { PLANTS } from './plants.js';
+import { LAYER } from './world.js';
 
 const hash = (x, y) => {
   let h = (x * 374761393 + y * 668265263) ^ 0x5bf03635;
@@ -184,17 +185,17 @@ export class Renderer {
   /** Провода и трубы — тонкими линиями, соединяются с соседями. */
   drawConduits(ctx, x0, x1, y0, y1) {
     const w = this.world;
-    const styles = { power: ['#d8b25a', 2], liquid: ['#4d9ad6', 3.2], gas: ['#b98ad8', 3.2] };
-    for (const kind of ['liquid', 'gas', 'power']) {
+    const styles = { power: ['#d8b25a', 2], liquid: ['#4d9ad6', 3.2], gas: ['#b98ad8', 3.2], auto: ['#7ed957', 1.6] };
+    for (const kind of ['liquid', 'gas', 'power', 'auto']) {
       const arr = w.cond[kind];
       const [color, width] = styles[kind];
       ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineCap = 'round';
-      const off = kind === 'power' ? -4 : kind === 'liquid' ? 0 : 4;
+      const off = kind === 'power' ? -4 : kind === 'liquid' ? 0 : kind === 'gas' ? 4 : 6;
       for (let y = y0; y <= y1; y++) {
         for (let x = x0; x <= x1; x++) {
           const i = y * W + x;
           if (!arr[i]) continue;
-          const st = w.bdata.get(i * 4 + (kind === 'power' ? 1 : kind === 'liquid' ? 2 : 3));
+          const st = w.bdata.get(i * 8 + LAYER[kind]);
           ctx.globalAlpha = st && st.built ? 1 : 0.35;
           const cx = x * TILE + TILE / 2, cy = y * TILE + TILE / 2 + off;
           ctx.beginPath();
@@ -466,6 +467,22 @@ export class Renderer {
           const k = Math.max(0, Math.min(1, (t + 20) / 80));
           ctx.fillStyle = `rgba(${(k * 255) | 0},${(90 - k * 60) | 0},${((1 - k) * 235) | 0},.6)`;
           ctx.fillRect(px, py, TILE, TILE);
+        }
+      }
+    }
+    if (this.overlay === 'rooms') {
+      let n = 0;
+      for (const room of game.rooms) {
+        const hue = (n++ * 67) % 360;
+        ctx.fillStyle = `hsla(${hue},70%,55%,.35)`;
+        for (const i of room.tiles) {
+          const x = (i % W) * TILE, y = ((i / W) | 0) * TILE;
+          ctx.fillRect(x, y, TILE, TILE);
+        }
+        const first = room.buildings[0];
+        if (first) {
+          ctx.fillStyle = '#fff'; ctx.font = '6px "Trebuchet MS"'; ctx.textAlign = 'center';
+          ctx.fillText(room.name, first.x * TILE + TILE / 2, first.y * TILE - 3);
         }
       }
     }

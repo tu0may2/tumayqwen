@@ -11,6 +11,7 @@ export function updatePower(world, nets, dt, totals) {
 
   // машины без сети остаются обесточенными
   for (const [, st] of world.bdata) if (st.built && st.def.power < 0) st.powered = false;
+  if (world.netDirty) return;
 
   for (const net of nets.nets.power) {
     let gen = 0, demand = 0, stored = 0, cap = 0;
@@ -42,10 +43,49 @@ export function updatePower(world, nets, dt, totals) {
       if (charging) { const put = Math.min(st.def.storeJ - st.charge, rest); st.charge += put; rest -= put; }
       else { const take = Math.min(st.charge, rest); st.charge -= take; rest -= take; }
     }
+    // перегрузка: если сеть тянет больше предела, провод перегорает
+    if (net.wattCap && consumed > net.wattCap) {
+      net.overload = (net.overload || 0) + dt;
+      if (net.overload > 4) {
+        net.overload = 0;
+        const wires = [];
+        for (let i = 0; i < world.cond.power.length; i++) if (nets.map.power[i] === nets.nets.power.indexOf(net)) wires.push(i);
+        const victim = wires[Math.floor(Math.random() * wires.length)];
+        if (victim !== undefined) {
+          world.removeBuilding(victim % W, (victim / W) | 0, 1);
+          totals.burned = (totals.burned || 0) + 1;
+        }
+      }
+    } else net.overload = 0;
+
     net.gen = gen; net.demand = demand; net.consumed = consumed;
     net.stored = batteries.reduce((a, b) => a + b.charge, 0); net.storeCap = cap;
     totals.gen += gen; totals.demand += demand; totals.stored += net.stored; totals.cap += cap;
     if (demand > gen && net.stored <= 0) totals.deficit += demand - gen;
+  }
+}
+
+/** Датчики и логические сети: сигнал включает/выключает машины. */
+export function updateAutomation(world, nets, dt) {
+  for (const net of nets.nets.auto) net.signal = false;
+  for (const [, st] of world.bdata) {
+    if (!st.built || !st.def.sensor) continue;
+    const i = st.y * W + st.x;
+    const d = st.def;
+    let v = 0;
+    if (d.sensor === 'temp') v = world.temp[i];
+    else if (d.sensor === 'gas') v = world.o2[i] + world.co2[i] + world.steam[i] + world.h2[i];
+    else if (d.sensor === 'water') v = world.water[i];
+    const thr = st.threshold ?? d.threshold;
+    const above = st.above ?? d.above;
+    st.signal = d.sensor === 'manual' ? (st.on !== false) : (above ? v > thr : v < thr);
+    const net = nets.net('auto', st.net?.auto ?? -1);
+    if (net && st.signal) net.signal = true;
+  }
+  for (const [, st] of world.bdata) {
+    if (!st.built || !st.def.auto) continue;
+    const id = st.net?.auto ?? -1;
+    st.autoOff = id >= 0 && !nets.net('auto', id).signal;
   }
 }
 
@@ -54,6 +94,7 @@ export function updateMachines(world, nets, game, dt) {
   for (const [, st] of world.bdata) {
     if (!st.built) continue;
     const d = st.def, x = st.x, y = st.y, i = y * W + x;
+    if (st.autoOff) { if (d.power < 0) st.powered = false; continue; }
     const liq = nets.net('liquid', st.net?.liquid ?? -1);
     const gas = nets.net('gas', st.net?.gas ?? -1);
 
@@ -146,6 +187,20 @@ export function updateMachines(world, nets, game, dt) {
         st.store.dirt = (st.store.dirt || 0) + conv;
         world.temp[i] += 0.2 * dt;
         if ((st.store.dirt || 0) > 25) { world.addItem(x, y, 'dirt', st.store.dirt); st.store.dirt = 0; }
+        break;
+      }
+      case 'suitdock': {
+        // док набирает кислород из газовой сети или из воздуха вокруг
+        if (!st.powered) break;
+        const want = 40 - (st.store.o2 || 0);
+        if (want > 0) {
+          const got = gas ? Networks.pull(gas, 'o2', 1 * dt) : null;
+          if (got) st.store.o2 = (st.store.o2 || 0) + got.amt;
+          else if (world.o2[i] > 0.4) {
+            const take = Math.min(world.o2[i] - 0.4, 0.5 * dt);
+            world.o2[i] -= take; st.store.o2 = (st.store.o2 || 0) + take;
+          }
+        }
         break;
       }
       case 'ration': {

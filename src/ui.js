@@ -4,6 +4,8 @@ import { mass } from './util.js';
 import { JOB_ORDER, JOB_LABEL } from './jobs.js';
 import { TECHS } from './research.js';
 import { PLANTS } from './plants.js';
+import { BLOCKS } from './schedule.js';
+import { saveGame, loadInto, hasSave } from './save.js';
 
 const TABS = [
   { name: 'Приказы', tools: [
@@ -118,9 +120,11 @@ export class UI {
       if (e.key === 'ArrowDown' || e.key === 's') this.r.cam.y += pan;
     });
 
-    document.querySelectorAll('.spd').forEach(b => {
+    document.querySelectorAll('.spd[data-speed]').forEach(b => {
       b.onclick = () => { g.speed = +b.dataset.speed; this.syncSpeed(); };
     });
+    document.getElementById('btn-save').onclick = () => saveGame(g);
+    document.getElementById('btn-load').onclick = () => { if (hasSave()) loadInto(g); else g.alert('Сохранений нет.'); };
     document.querySelectorAll('.ov').forEach(b => {
       b.onclick = () => {
         document.querySelectorAll('.ov').forEach(x => x.classList.remove('active'));
@@ -131,7 +135,7 @@ export class UI {
   }
 
   syncSpeed() {
-    document.querySelectorAll('.spd').forEach(b =>
+    document.querySelectorAll('.spd[data-speed]').forEach(b =>
       b.classList.toggle('active', +b.dataset.speed === this.game.speed));
   }
 
@@ -202,6 +206,12 @@ export class UI {
         rows.push(kv('Постройка', st.def.name));
         rows.push(kv('Статус', st.built ? (st.remove ? 'на разбор' : 'работает') : `стройка ${Math.round(st.prog / st.def.work * 100)}%`));
         if (!st.built) rows.push(kv('Доставлено', Object.entries(st.delivered || {}).map(([r, a]) => `${Math.round(a)} ${RESOURCES[r].name}`).join(', ') || '—'));
+        if (st.def.sensor) {
+          rows.push(kv('Датчик', st.def.sensor === 'manual' ? (st.on !== false ? 'включён' : 'выключен')
+            : `${st.above ?? st.def.above ? '>' : '<'} ${st.threshold ?? st.def.threshold}`));
+          rows.push(kv('Сигнал', st.signal ? 'ДА' : 'нет'));
+        }
+        if (st.autoOff) rows.push(kv('Автоматика', 'выключено сигналом'));
         if (st.def.power) rows.push(kv('Энергия', `${st.def.power} Вт ${st.def.power < 0 ? (st.powered ? '✅' : '❌') : ''}`));
         if (st.def.storeJ) rows.push(kv('Заряд', `${(st.charge / 1000).toFixed(1)} кДж`));
         if (Object.keys(st.store || {}).length)
@@ -235,6 +245,16 @@ export class UI {
       body.innerHTML = rows.join('');
     }
 
+    // расписание
+    const strip = document.getElementById('schedule-strip');
+    const nowSlot = Math.min(11, Math.floor(g.cycleT * 12));
+    strip.innerHTML = g.schedule.slots.map((k, idx) =>
+      `<div class="${idx === nowSlot ? 'now' : ''}" data-slot="${idx}" title="${BLOCKS[k].name}"
+        style="background:${BLOCKS[k].color}33;border-color:${BLOCKS[k].color}">${BLOCKS[k].icon}</div>`).join('');
+    strip.querySelectorAll('div').forEach(el => {
+      el.onclick = () => { g.schedule.cycle(+el.dataset.slot); this.lastUI = 1; };
+    });
+
     // исследования
     const rb = document.getElementById('research-body');
     const R = g.research;
@@ -267,7 +287,15 @@ export class UI {
         <div>${p.moodFactors.map(f => `<span style="color:${f[1] < 0 ? 'var(--bad)' : 'var(--good)'}">${f[0]} ${f[1] > 0 ? '+' : ''}${f[1]}</span>`).join(' · ')}</div>
         ${p.sick ? `<div style="color:var(--bad)">Болезнь: ${p.sick.name}</div>` : ''}
         <div class="blabel"><span>Работы (клик — вкл/выкл)</span></div>
-        <div class="prio">${JOB_ORDER.map(j => `<span class="${p.disabled[j] ? 'off' : ''}" data-pid="${p.id}" data-job="${j}">${JOB_LABEL[j] || j}</span>`).join('')}</div>
+        <div class="prio">${JOB_ORDER.map(j => {
+          const v = p.prioOf(j);
+          return `<span class="${v === 0 ? 'off' : v >= 5 ? 'p5' : v <= 1 ? 'p1' : ''}" data-pid="${p.id}" data-job="${j}">${JOB_LABEL[j] || j} ${v}</span>`;
+        }).join('')}</div>
+        <div class="blabel"><span>Увлечения</span></div>
+        <div>${Object.entries(p.passions).filter(([, v]) => v).map(([k, v]) => `${v === 2 ? '🔥' : '✨'} ${k}`).join(' · ') || '—'}</div>
+        <div class="blabel"><span>Отношения</span></div>
+        <div class="rel">${g.pawns.filter(q => q !== p).map(q => `${q.name.split(' ')[0]}: ${p.relationTo(q)} (${Math.round(p.opinion(q))})`).join('<br>') || '—'}</div>
+        ${p.suitO2 > 0 ? `<div>Скафандр: ${Math.round(p.suitO2)}%</div>` : ''}
       ` : '';
       return `<div class="col-card ${sel ? 'sel' : ''}" data-id="${p.id}">
         <div class="col-head"><span class="col-name">${p.name}</span><span class="col-task">${p.statusText()}</span></div>
@@ -285,7 +313,8 @@ export class UI {
         e.stopPropagation();
         const p = g.pawns.find(x => x.id === +el.dataset.pid);
         if (!p) return;
-        p.disabled[el.dataset.job] = !p.disabled[el.dataset.job];
+        const cur = p.prioOf(el.dataset.job);
+        p.prio[el.dataset.job] = e.shiftKey ? Math.max(0, cur - 1) : (cur + 1) % 6;
         p.dropJob(g);
         this.lastUI = 1;
       };

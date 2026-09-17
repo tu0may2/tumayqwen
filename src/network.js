@@ -3,12 +3,13 @@
 // через собственный тайл или соседний по стороне.
 import { W, H, BUILDINGS, LAYER } from './world.js';
 
-const KINDS = ['power', 'liquid', 'gas'];
+const KINDS = ['power', 'liquid', 'gas', 'auto'];
 
 export class Networks {
   constructor() {
-    this.map = { power: new Int32Array(W * H).fill(-1), liquid: new Int32Array(W * H).fill(-1), gas: new Int32Array(W * H).fill(-1) };
-    this.nets = { power: [], liquid: [], gas: [] };
+    this.map = {};
+    this.nets = {};
+    for (const k of KINDS) { this.map[k] = new Int32Array(W * H).fill(-1); this.nets[k] = []; }
   }
 
   rebuild(world) {
@@ -32,17 +33,18 @@ export class Networks {
           if (Math.abs((n % W) - x) > 1) continue;
           if (this.map[kind][n] >= 0) continue;
           if (!world.cond[kind][n]) continue;
-          const s2 = world.bdata.get(n * 4 + LAYER[kind]);
+          const s2 = world.bdata.get(n * 8 + LAYER[kind]);
           if (!s2 || !s2.built) continue;
           this.map[kind][n] = id; stack.push(n);
         }
       }
       net.cap = net.tiles * (kind === 'liquid' ? 10 : kind === 'gas' ? 1 : 0);
+      net.wattCap = kind === 'power' ? 1000 : 0;   // предел обычного провода
     }
 
     // подключение машин
     for (const [, st] of world.bdata) {
-      st.net = { power: -1, liquid: -1, gas: -1 };
+      st.net = { power: -1, liquid: -1, gas: -1, auto: -1 };
       if (!st.built || !st.def.net) continue;
       const i = st.y * W + st.x;
       for (const kind of KINDS) {

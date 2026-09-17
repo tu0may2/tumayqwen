@@ -21,7 +21,10 @@ export const JOB_LABEL = {
 };
 
 export class JobBoard {
-  constructor() { this.jobs = []; this.claimed = new Map(); }
+  constructor() { this.jobs = []; this.claimed = new Map(); this.bad = new Map(); }
+
+  /** Временно отложить невыполнимую задачу, чтобы не зацикливаться на ней. */
+  postpone(job, until) { if (job) this.bad.set(job.key, until); }
 
   clearClaims(pawn) {
     for (const [job, owner] of this.claimed) if (owner === pawn) this.claimed.delete(job);
@@ -92,13 +95,19 @@ export class JobBoard {
       .filter(j => {
         const owner = this.claimed.get(j.key);
         if (owner && owner !== pawn) return false;
-        if (pawn.disabled[j.type]) return false;
+        const bad = this.bad.get(j.key);
+        if (bad !== undefined) { if (bad > game.time) return false; this.bad.delete(j.key); }
+        if (pawn.prioOf(j.type) <= 0) return false;
         if (!stillValid(world, j)) return false;
         if (j.type === 'haul' && !storageFor(world, j.res)) return false;
         if ((j.type === 'supply' || j.type === 'build') && !supplyReady(world, j)) return false;
         return true;
       })
-      .map(j => ({ j, rank: JOB_ORDER.indexOf(j.type), d: Math.abs(j.x - pawn.x) + Math.abs(j.y - pawn.y) }))
+      .map(j => ({
+        j,
+        rank: JOB_ORDER.indexOf(j.type) - pawn.prioOf(j.type) * 3,
+        d: Math.abs(j.x - pawn.x) + Math.abs(j.y - pawn.y),
+      }))
       .sort((a, b) => (a.rank - b.rank) || (a.d - b.d))
       .slice(0, 14);
 
@@ -145,7 +154,7 @@ export function stillValid(world, j) {
 
 /** Есть ли где хранить ресурс. */
 export function storageFor(world, res) {
-  const kind = res === 'food' ? 'food' : 'mat';
+  const kind = storageKind(res);
   for (const [i, st] of world.bdata) {
     if (!st.built || st.def.store !== kind) continue;
     const used = Object.values(st.store).reduce((a, b) => a + b, 0);
@@ -160,22 +169,53 @@ function supplyReady(world, job) {
   return !!findResource(world, job.res);
 }
 
-/** Найти источник ресурса: сначала склады, потом кучи на полу. */
-export function findResource(world, res, near) {
-  let best = null, bestD = Infinity;
-  for (const [i, st] of world.bdata) {
+export function storageKind(res) { return res === 'food' || res === 'meal' ? 'food' : 'mat'; }
+
+/** Источники ресурса, отсортированные по удалённости: склады и кучи на полу. */
+export function findResources(world, res, near, limit = 8) {
+  const out = [];
+  for (const [, st] of world.bdata) {
     if (!st.built || !st.store[res] || st.store[res] < 0.5) continue;
-    const d = near ? Math.abs(st.x - near.x) + Math.abs(st.y - near.y) : 0;
-    if (d < bestD) { bestD = d; best = { x: st.x, y: st.y, from: st }; }
+    out.push({ x: st.x, y: st.y, from: st });
   }
-  if (best) return best;
   for (const [i, pile] of world.items) {
     if (!pile[res] || pile[res] < 0.5) continue;
-    const x = i % W, y = (i / W) | 0;
-    const d = near ? Math.abs(x - near.x) + Math.abs(y - near.y) : 0;
-    if (d < bestD) { bestD = d; best = { x, y, pileIdx: i }; }
+    out.push({ x: i % W, y: (i / W) | 0, pileIdx: i });
   }
-  return best;
+  if (near) out.sort((a, b) =>
+    (Math.abs(a.x - near.x) + Math.abs(a.y - near.y)) - (Math.abs(b.x - near.x) + Math.abs(b.y - near.y)));
+  return out.slice(0, limit);
+}
+
+/** Ближайший источник ресурса (без проверки достижимости). */
+export function findResource(world, res, near) {
+  return findResources(world, res, near, 1)[0] || null;
+}
+
+/** Ближайший достижимый источник — с проверкой пути. */
+export function reachableResource(world, res, pawn) {
+  for (const src of findResources(world, res, pawn)) {
+    const path = findPath(world, pawn.x, pawn.y, accessCells(world, src.x, src.y));
+    if (path) return { src, path };
+  }
+  return null;
+}
+
+/** Ближайший достижимый склад для ресурса. */
+export function reachableStorage(world, res, pawn) {
+  const kind = res === 'food' || res === 'meal' ? 'food' : 'mat';
+  const bins = [];
+  for (const [, st] of world.bdata) {
+    if (!st.built || st.def.store !== kind) continue;
+    const used = Object.values(st.store).reduce((a, b) => a + b, 0);
+    if (used < st.def.cap) bins.push(st);
+  }
+  bins.sort((a, b) => (Math.abs(a.x - pawn.x) + Math.abs(a.y - pawn.y)) - (Math.abs(b.x - pawn.x) + Math.abs(b.y - pawn.y)));
+  for (const bin of bins.slice(0, 6)) {
+    const path = findPath(world, pawn.x, pawn.y, accessCells(world, bin.x, bin.y));
+    if (path) return { bin, path };
+  }
+  return null;
 }
 
 /** Сколько всего ресурса на складах и на полу. */
