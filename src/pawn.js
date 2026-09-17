@@ -65,8 +65,10 @@ export class Pawn {
   // ------------------------------------------------------------- потребности
   updateNeeds(world, game, dt) {
     const i = this.idx;
-    const o2 = world.o2[i];
-    const submerged = world.water[i] > 300;
+    // дышим на уровне головы, а выдыхаем CO₂ вниз — он тяжелее
+    const head = world.inside(this.x, this.y - 1) && !world.gasBlocked(i - W) ? i - W : i;
+    const o2 = world.o2[head];
+    const submerged = world.water[i] > 450 || world.water[head] > 450;   // с головой
     if (submerged) {
       this.oxygen -= (14 / this.lungs) * dt;          // тонет
       this.health -= 1.5 * dt;
@@ -74,7 +76,7 @@ export class Pawn {
       this.suitO2 = Math.max(0, this.suitO2 - 3 * dt);   // дышим из баллона
       this.oxygen = Math.min(100, this.oxygen + 20 * dt);
     } else if (o2 > BREATH_MIN) {
-      world.o2[i] = Math.max(0, o2 - 0.0009 * dt * 60 * 0.2);
+      world.o2[head] = Math.max(0, o2 - 0.0009 * dt * 60 * 0.2);
       world.co2[i] += 0.0006 * dt * 60 * 0.2;
       this.oxygen = Math.min(100, this.oxygen + 25 * dt);
     } else {
@@ -225,7 +227,7 @@ export class Pawn {
     }
 
     // 0. выбраться из воды
-    if (world.water[this.idx] > 300) { if (this.planEscapeWater(world)) { this.task = 'breathe'; return; } }
+    if (world.water[this.idx] > 150) { if (this.planEscapeWater(world)) { this.task = 'breathe'; return; } }
     // 1. воздух
     if (this.oxygen < 45) { if (this.planBreathe(world)) { this.task = 'breathe'; return; } }
     // 2. еда
@@ -274,7 +276,7 @@ export class Pawn {
       for (let x = Math.max(1, this.x - 16); x < this.x + 16; x++) {
         if (!world.inside(x, y)) continue;
         const i = y * W + x;
-        if (world.water[i] < 100 && world.standable(x, y) && world.o2[i] > BREATH_MIN) goals.add(i);
+        if (world.water[i] < 60 && world.standable(x, y) && world.o2[i] > BREATH_MIN) goals.add(i);
       }
     const p = goals.size ? findPath(world, this.x, this.y, goals) : null;
     if (!p) return false;

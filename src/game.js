@@ -31,7 +31,7 @@ export class Game {
     this.schedule = new Schedule();
     this.rooms = []; this.roomsAt = 0;
     this.world.netDirty = true;
-    this.rebuildAt = 0; this.gameOver = false;
+    this.rebuildAt = 0; this.gameOver = false; this.warnAt = 20;
 
     this.critters = populate(this.world, this.rng);
     const s = this.world.start;
@@ -163,6 +163,7 @@ export class Game {
     if (this.time > this.rebuildAt) { this.board.rebuild(this.world, this); this.rebuildAt = this.time + 0.7; }
     for (const p of [...this.pawns]) p.update(this.world, this, dt);
     stepSocial(this, dt);
+    this.checkWarnings();
     for (const c of this.critters) c.update(this.world, this, dt);
     if (this.critters.some(c => c.dead)) this.critters = this.critters.filter(c => !c.dead);
   }
@@ -178,10 +179,10 @@ export class Game {
       const i = w.idx(v.x, v.y);
       if (w.mat[i]) continue;
       const r = v.rate * dt;
-      if (v.type === 'steam') { w.steam[i] += r * 0.6; w.temp[i] = Math.min(400, w.temp[i] + r * 60); }
-      else if (v.type === 'water') { w.water[i] += r * 220; w.temp[i] += (60 - w.temp[i]) * Math.min(1, r * 0.4); }
-      else if (v.type === 'co2') { w.co2[i] += r * 0.5; w.temp[i] += r * 5; }
-      else { w.h2[i] += r * 0.25; w.temp[i] += r * 20; }
+      if (v.type === 'steam') { w.steam[i] += r * 0.15; w.temp[i] = Math.min(400, w.temp[i] + r * 25); }
+      else if (v.type === 'water') { w.water[i] += r * 9; w.temp[i] += (60 - w.temp[i]) * Math.min(1, r * 0.2); }
+      else if (v.type === 'co2') { w.co2[i] += r * 0.12; w.temp[i] += r * 4; }
+      else { w.h2[i] += r * 0.06; w.temp[i] += r * 12; }
     }
   }
 
@@ -242,6 +243,19 @@ export class Game {
       const p = this.spawnPawn(s.x, s.y);
       this.alert(`К шлюзу прибился скиталец: ${p.name}.`, true);
     }
+  }
+
+  /** Предупреждения: кислород, энергия, еда, болезни. */
+  checkWarnings() {
+    if (this.time < this.warnAt) return;
+    this.warnAt = this.time + 30;
+    const gasping = this.pawns.filter(p => p.oxygen < 45).length;
+    if (gasping) this.alert(`Задыхаются: ${gasping}. Нужен кислород!`);
+    if (this.power.deficit > 0) this.alert(`Не хватает ${Math.round(this.power.deficit)} Вт.`);
+    if (this.stock('food') + this.stock('meal') < 1200 * this.pawns.length)
+      this.alert('Еда на исходе — стройте грядки и кухню.');
+    const sick = this.pawns.filter(p => p.sick).length;
+    if (sick) this.alert(`Больных: ${sick}. Нужны медкойки и гигиена.`);
   }
 
   onNewCycle() {

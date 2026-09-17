@@ -63,6 +63,7 @@ export class World {
     this.water = new Float32Array(W * H);   // кг воды в тайле
     this.pwater = new Float32Array(W * H);  // доля загрязнённой воды 0..1
     this.germs = new Float32Array(W * H);   // условные единицы микробов
+    this.phase = new Float32Array(W * H);   // накопленный фазовый переход (таяние/замерзание), кг
     this.vents = [];
     this.temp = new Float32Array(W * H);
     this.light = new Float32Array(W * H);
@@ -162,10 +163,23 @@ export class World {
         if (d < 1) {
           const i = y * W + x;
           if (!this.back[i]) this.back[i] = 1;
-          this.mat[i] = 0; this.o2[i] = 1.8; this.temp[i] = 22;
+          this.mat[i] = 0; this.o2[i] = 2.2; this.co2[i] = 0; this.temp[i] = 22;
         }
       }
     }
+    // герметичная скорлупа вокруг стартовой каверны — базу надо вскрывать самому
+    for (let y = cy - 8; y <= cy + 7; y++) {
+      for (let x = cx - 14; x <= cx + 14; x++) {
+        if (!this.inside(x, y)) continue;
+        const d = ((x - cx) / 11) ** 2 + ((y - cy) / 6) ** 2;
+        if (d >= 1 && d < 1.6) {
+          const i = y * W + x;
+          if (!this.mat[i]) { this.mat[i] = 2; this.temp[i] = MATS[2].heat; if (!this.back[i]) this.back[i] = 2; }
+          this.o2[i] = 0; this.co2[i] = 0; this.water[i] = 0;
+        }
+      }
+    }
+
     // пол каверны
     for (let x = cx - 11; x <= cx + 11; x++) {
       const y = cy + 5;
@@ -187,7 +201,7 @@ export class World {
       }
     }
 
-    // гейзеры и вулканические жерла
+    // гейзеры и вулканические жерла (подальше от базы)
     const ventTypes = ['steam', 'water', 'co2', 'h2'];
     for (let n = 0; n < 6; n++) {
       for (let tries = 0; tries < 400; tries++) {
@@ -195,6 +209,7 @@ export class World {
         const y = Math.floor(H * 0.35 + this.rng() * H * 0.55);
         const i = y * W + x;
         if (this.mat[i] || this.mat[i + W] === 0 || this.water[i] > 10) continue;
+        if (Math.abs(x - this.start.x) < 16 && Math.abs(y - this.start.y) < 10) continue;  // не в базе
         const type = ventTypes[n % ventTypes.length];
         this.vents.push({ x, y, type, t: this.rng() * 200, period: 220 + this.rng() * 260, active: false, rate: 0.6 + this.rng() });
         break;

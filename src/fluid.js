@@ -21,6 +21,7 @@ const HEAT_K = 0.055;
 const C_GAS = 1.0, C_WATER = 4.18, C_SOLID = 0.8;
 // скрытая теплота, кДж/кг
 const L_FUSION = 334, L_VAPOR = 2260;
+const ICE_MASS = 400, C_ICE = 2.0;
 
 export function stepFluids(world, dt) {
   stepLiquid(world, dt);
@@ -204,29 +205,46 @@ function stepPhases(world, dt) {
     for (let x = 1; x < W - 1; x++) {
       const i = y * W + x;
 
-      // лёд тает
-      if (mat[i] === 6 && temp[i] > 0) {
-        const above = i - W;
-        mat[i] = 0;
-        world.digProg[i] = 0;
-        water[i] += 400;
-        temp[i] = Math.max(0.1, temp[i] - L_FUSION / C_WATER * 0.15);
+      // --- лёд тает: сколько растает, ограничено доступным теплом
+      if (mat[i] === 6) {
+        if (temp[i] > 0) {
+          const heat = temp[i] * ICE_MASS * C_ICE;          // кДж выше точки плавления
+          const melted = Math.min(ICE_MASS, heat / L_FUSION) * Math.min(1, dt);
+          world.phase[i] += melted;
+          temp[i] -= melted * L_FUSION / (ICE_MASS * C_ICE);
+          if (world.phase[i] >= ICE_MASS) {
+            mat[i] = 0; world.digProg[i] = 0; world.phase[i] = 0;
+            water[i] += ICE_MASS; temp[i] = 0;
+          }
+        } else if (world.phase[i] > 0) {
+          world.phase[i] = Math.max(0, world.phase[i] - 5 * dt);  // подмерзает обратно
+        }
+        continue;
       }
 
       if (mat[i]) continue;
 
-      // вода ↔ лёд
-      if (water[i] > 350 && temp[i] < -0.5 && !world.bid[i]) {
-        water[i] -= 400;
-        if (water[i] < 0) water[i] = 0;
-        mat[i] = 6;
-        temp[i] += L_FUSION / C_SOLID * 0.05;
-        continue;
+      // --- вода замерзает: скрытая теплота греет остаток
+      if (water[i] > 1 && temp[i] < 0) {
+        const cool = -temp[i] * water[i] * C_WATER;
+        const frozen = Math.min(water[i], cool / L_FUSION) * Math.min(1, dt);
+        if (frozen > 0) {
+          water[i] -= frozen;
+          world.phase[i] += frozen;
+          temp[i] += frozen * L_FUSION / (water[i] * C_WATER + 1);
+          if (world.phase[i] >= ICE_MASS * 0.8 && water[i] < 30 && !world.bid[i]) {
+            mat[i] = 6; world.phase[i] = 0; water[i] = 0; temp[i] = Math.min(temp[i], -0.5);
+            continue;
+          }
+        }
+      } else if (world.phase[i] > 0 && temp[i] > 0.5) {
+        world.phase[i] = Math.max(0, world.phase[i] - 5 * dt);
       }
       // вода → пар (кипение и медленное испарение в сухой воздух)
       if (water[i] > 0.5) {
         if (temp[i] > 100) {
-          const ev = Math.min(water[i], (temp[i] - 100) * 2 * rate);
+          const heat = (temp[i] - 100) * water[i] * C_WATER;
+          const ev = Math.min(water[i], heat / L_VAPOR) * rate;
           water[i] -= ev; steam[i] += ev;
           temp[i] -= ev * L_VAPOR / (water[i] * C_WATER + ev * C_GAS + 1);
         } else if (temp[i] > 15 && steam[i] < 0.4) {
