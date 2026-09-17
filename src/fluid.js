@@ -24,19 +24,14 @@ const L_FUSION = 334, L_VAPOR = 2260;
 
 export function stepFluids(world, dt) {
   stepLiquid(world, dt);
+  stepGerms(world, dt);
   stepGas(world, dt);
   displaceGas(world);
   stepPhases(world, dt);
   stepHeat(world, dt);
 }
 
-function blockedAt(world, i) {
-  if (world.mat[i]) return true;
-  const b = BUILDINGS[world.bid[i]];
-  if (!b || !b.solid) return false;
-  const st = world.bdata.get(i);
-  return !!(st && st.built);
-}
+function blockedAt(world, i) { return world.gasBlocked(i); }
 
 /** Смешение температур при переносе массы m из a в b (mb — масса приёмника). */
 function advect(temp, a, b, m, mb, c) {
@@ -246,6 +241,34 @@ function stepPhases(world, dt) {
         temp[i] += cond * L_VAPOR / (water[i] * C_WATER + 1) * 0.02;
       }
       if (water[i] < 0.01) water[i] = 0;
+    }
+  }
+}
+
+// ---------------------------------------------------------------- микробы
+/** Микробы живут в грязной воде и слизи, гибнут в чистом кислороде и на морозе. */
+function stepGerms(world, dt) {
+  const { germs, water, pwater, temp, o2, mat } = world;
+  const k = Math.min(0.3, 0.12 * dt * 60);
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x;
+      let g = germs[i];
+      if (mat[i] === 9) { germs[i] = Math.max(g, 120); continue; }   // слизь — источник
+      if (g <= 0.01) { germs[i] = 0; continue; }
+      // среда
+      let decay = 0.03;                       // базовое отмирание
+      if (water[i] > 20 && pwater[i] > 0.4) decay = -0.01;           // грязная вода — рассадник
+      else if (o2[i] > 0.4) decay = 0.09;                            // чистый кислород убивает
+      if (temp[i] < -2 || temp[i] > 60) decay += 0.3;                // мороз и жар
+      g *= Math.max(0, 1 - decay * dt);
+      // расползание по воздуху и воде
+      for (const n of [i - 1, i + 1, i - W, i + W]) {
+        if (world.gasBlocked(n)) continue;
+        const d = (g - germs[n]) * k * 0.12;
+        if (d > 0) { g -= d; germs[n] += d; }
+      }
+      germs[i] = g < 0.01 ? 0 : g;
     }
   }
 }

@@ -3,6 +3,7 @@ import { W, BREATH_MIN, BUILDINGS } from './world.js';
 import { findPath, accessCells } from './path.js';
 import { JOB_LABEL, storageFor, findResource } from './jobs.js';
 import { randomName, pick, clamp } from './util.js';
+import { PLANTS } from './plants.js';
 
 export const TRAITS = [
   { key: 'strong',   name: 'Силач',        desc: '+40% к копанию',            mod: p => p.skills.dig += 0.4 },
@@ -31,6 +32,9 @@ export class Pawn {
     this.skills = { dig: 1, build: 1, farm: 1, haul: 1 };
     this.xp = { dig: 0, build: 0, farm: 0, haul: 0 };
     this.oxygen = 100; this.calories = 3000; this.stamina = 100; this.stress = 0; this.health = 100;
+    this.bladder = 0; this.hygiene = 100; this.fun = 70;
+    this.germs = { slimelung: 0, food: 0 };
+    this.sick = null;
     this.mood = 100; this.moodFactors = [];
     this.carry = null; this.task = 'idle'; this.facing = 1; this.anim = 0;
     this.disabled = {};
@@ -72,6 +76,44 @@ export class Pawn {
     if (this.task === 'sleep') this.stamina = Math.min(100, this.stamina + 0.75 * dt);
     else this.stamina -= 0.22 / this.sleepNeed * dt;
 
+    this.bladder = Math.min(120, this.bladder + (this.task === 'sleep' ? 0.05 : 0.12) * dt);
+    this.hygiene = Math.max(0, this.hygiene - 0.05 * dt);
+    this.fun = Math.max(0, this.fun - (this.task === 'sleep' ? 0 : 0.07) * dt);
+
+    // микробы: слизь и грязная вода заражают, гигиена защищает
+    const germCell = world.germs[i];
+    if (germCell > 1) {
+      this.germs.slimelung += germCell * 0.0006 * dt * (submerged ? 3 : 1);
+      world.germs[i] = Math.max(0, germCell - 0.02 * dt);
+    }
+    if (world.pwater[i] > 0.4 && world.water[i] > 50) this.germs.food += 0.05 * dt;
+    if (this.hygiene > 70) { this.germs.food *= 1 - 0.04 * dt; this.germs.slimelung *= 1 - 0.02 * dt; }
+    if (!this.sick) {
+      if (this.germs.slimelung > 1) this.sick = { type: 'slimelung', name: 'Слизистая лёгочка', t: 0 };
+      else if (this.germs.food > 1) this.sick = { type: 'food', name: 'Пищевое отравление', t: 0 };
+      if (this.sick) game.alert(`${this.name} заболел: ${this.sick.name}`);
+    } else {
+      this.sick.t += dt;
+      if (this.sick.type === 'slimelung') { this.health -= 0.5 * dt; this.stamina -= 0.1 * dt; }
+      else { this.calories -= 1.2 * dt; this.bladder += 0.25 * dt; }
+      const healRate = this.onMedCot ? 4 : 1;
+      this.germs[this.sick.type] -= 0.012 * healRate * dt;
+      if (this.germs[this.sick.type] <= 0) {
+        this.germs[this.sick.type] = 0;
+        game.alert(`${this.name} выздоровел.`, true);
+        this.sick = null;
+      }
+    }
+
+    // не дотерпел
+    if (this.bladder >= 120) {
+      this.bladder = 0;
+      world.water[i] += 30; world.pwater[i] = 1; world.germs[i] += 400;
+      this.stress = Math.min(100, this.stress + 20);
+      this.hygiene = Math.max(0, this.hygiene - 50);
+      game.alert(`${this.name} не добежал до уборной...`);
+    }
+
     this.calories = Math.max(-2000, this.calories);
     this.stamina = clamp(this.stamina, 0, 100);
     this.oxygen = clamp(this.oxygen, 0, 100);
@@ -88,6 +130,10 @@ export class Pawn {
     if (world.water[i] > 100) f.push(['Мокрые ноги', -8]);
     if (T > 35) f.push(['Жарко', -12]); else if (T < 5) f.push(['Холодно', -12]);
     if (this.health < 60) f.push(['Плохое самочувствие', -15]);
+    if (this.sick) f.push(['Болезнь', -18]);
+    if (this.bladder > 80) f.push(['Хочет в уборную', -10]);
+    if (this.hygiene < 35) f.push(['Грязный', -8]);
+    if (this.fun < 25) f.push(['Скука', -14]); else if (this.fun > 75) f.push(['Отдохнул', +8]);
     if (game.decor > 0) f.push(['Обжитая база', +Math.min(12, game.decor)]);
     this.moodFactors = f;
     const target = clamp(100 + f.reduce((a, b) => a + b[1], 0), 0, 100);
@@ -129,6 +175,12 @@ export class Pawn {
     if (this.stamina < 18 || (night && this.stamina < 65)) {
       if (this.planSleep(world, game)) { this.task = 'sleep'; return; }
     }
+    // 3.5 личные нужды: уборная, гигиена, лечение, досуг
+    if (this.bladder > 75 && this.planUse(world, game, 'toilet')) { this.task = 'toilet'; return; }
+    if (this.hygiene < 40 && this.planUse(world, game, 'wash')) { this.task = 'wash'; return; }
+    if (this.sick && this.health < 75 && this.planUse(world, game, 'med')) { this.task = 'heal'; return; }
+    if (this.fun < 25 && this.planUse(world, game, 'fun')) { this.task = 'fun'; return; }
+
     // 4. работа
     if (game.time > this.retryAt) {
       const got = game.board.assign(world, this, game);
@@ -223,6 +275,61 @@ export class Pawn {
     return false;
   }
 
+  /** Универсальный поход к бытовому зданию: уборная, умывальник, медкойка, автомат. */
+  planUse(world, game, kind) {
+    const match = st => kind === 'toilet' ? st.def.toilet
+      : kind === 'wash' ? st.def.wash
+      : kind === 'med' ? st.def.med
+      : st.def.fun;
+    let best = null, bd = Infinity;
+    for (const [, st] of world.bdata) {
+      if (!st.built || !match(st) || st.busy) continue;
+      if (kind === 'fun' && st.def.power < 0 && !st.powered) continue;
+      const d = Math.abs(st.x - this.x) + Math.abs(st.y - this.y);
+      if (d < bd) { bd = d; best = st; }
+    }
+    if (!best) return false;
+    const p = findPath(world, this.x, this.y, accessCells(world, best.x, best.y));
+    if (!p) return false;
+    best.busy = this;
+    const use = (dt) => {
+      best.busy = this;
+      const i = best.y * W + best.x;
+      if (kind === 'toilet') {
+        this.bladder = Math.max(0, this.bladder - 60 * dt);
+        this.hygiene = Math.max(0, this.hygiene - 8 * dt);
+        if (this.bladder <= 0) {
+          best.uses = (best.uses || 0) + 1;
+          if ((best.store.dirt || 0) > 5) best.store.dirt -= 5;
+          world.addItem(best.x, best.y, 'pdirt', 6);
+          world.germs[i] += 60;
+          best.busy = null; return true;
+        }
+      } else if (kind === 'wash') {
+        const need = best.def.net?.liquid ? (best.store.water || 0) > 0.5 : true;
+        if (!need) { best.busy = null; return true; }
+        if (best.store.water) best.store.water -= 5 * dt;
+        this.hygiene = Math.min(100, this.hygiene + 45 * dt);
+        this.germs.food *= 1 - 1.2 * dt;
+        this.germs.slimelung *= 1 - 0.5 * dt;
+        world.germs[i] += 4 * dt;
+        if (this.hygiene >= 99) { best.busy = null; return true; }
+      } else if (kind === 'med') {
+        this.onMedCot = true;
+        this.health = Math.min(100, this.health + 3 * dt);
+        this.stamina = Math.min(100, this.stamina + 0.5 * dt);
+        if (!this.sick && this.health > 95) { this.onMedCot = false; best.busy = null; return true; }
+      } else {
+        this.fun = Math.min(100, this.fun + 12 * dt);
+        this.stress = Math.max(0, this.stress - 3 * dt);
+        if (this.fun >= 85) { best.busy = null; return true; }
+      }
+      return false;
+    };
+    this.plan = [{ go: p }, { act: use, label: kind === 'toilet' ? 'toilet' : kind === 'wash' ? 'wash' : kind === 'med' ? 'heal' : 'fun' }];
+    return true;
+  }
+
   startJob(world, game, job, path) {
     this.job = job;
     this.task = job.type;
@@ -254,7 +361,7 @@ export class Pawn {
     } else if (job.type === 'build') {
       steps.push({ go: path });
       steps.push({ act: (dt) => {
-        const st = world.bdata.get(job.y * W + job.x);
+        const st = world.bdata.get(job.k);
         if (!st || st.built) return true;
         st.prog += this.workRate('build') * dt * 3;
         this.gain('build', dt);
@@ -264,7 +371,7 @@ export class Pawn {
     } else if (job.type === 'deconstruct') {
       steps.push({ go: path });
       steps.push({ act: (dt) => {
-        const st = world.bdata.get(job.y * W + job.x);
+        const st = world.bdata.get(job.k);
         if (!st) return true;
         st.prog -= this.workRate('build') * dt * 4;
         if (st.prog <= 0) { world.removeBuilding(job.x, job.y); return true; }
@@ -273,17 +380,57 @@ export class Pawn {
     } else if (job.type === 'harvest') {
       steps.push({ go: path });
       steps.push({ act: (dt) => {
-        const st = world.bdata.get(job.y * W + job.x);
+        const st = world.bdata.get(job.k);
         if (!st || st.growth < 1) return true;
         st.growth = 0; st.planted = true;
-        world.addItem(job.x, job.y, 'food', 18 + this.skills.farm * 4);
+        const crop = PLANTS[st.plant] || { yield: 'food', amount: 18 };
+        world.addItem(job.x, job.y, crop.yield, crop.amount + this.skills.farm * 3);
         this.gain('farm', 1);
         return true;
       }, label: 'harvest' });
+    } else if (job.type === 'hunt') {
+      steps.push({ go: path });
+      steps.push({ act: (dt) => {
+        const c = game.critters.find(k => k.id === job.cid);
+        if (!c || c.dead) return true;
+        if (Math.abs(c.x - this.x) + Math.abs(c.y - this.y) > 2) return true;   // убежал — новая задача
+        c.hp = (c.hp ?? 10) - this.workRate('dig') * dt * 4;
+        if (c.hp <= 0) {
+          c.dead = true;
+          world.addItem(c.x, c.y, 'food', c.def.meat);
+          game.alert(`${this.name} добыл ${c.def.name.toLowerCase()}а.`, true);
+          return true;
+        }
+        return false;
+      }, label: 'hunt' });
+    } else if (job.type === 'cook') {
+      steps.push({ go: path });
+      steps.push({ act: (dt) => {
+        const st = world.bdata.get(job.k);
+        if (!st || (st.store.food || 0) < 5) return true;
+        st.cookProg = (st.cookProg || 0) + this.workRate('build') * dt * 2;
+        if (st.cookProg >= 10) {
+          st.cookProg = 0;
+          st.store.food -= 5;
+          world.addItem(job.x, job.y, 'meal', 5);
+          this.gain('farm', 1);
+          return true;
+        }
+        return false;
+      }, label: 'cook' });
+    } else if (job.type === 'research') {
+      steps.push({ go: path });
+      steps.push({ act: (dt) => {
+        const st = world.bdata.get(job.k);
+        if (!st || !st.powered || !game.research.current) return true;
+        game.research.progress += this.workRate('build') * dt * 1.4;
+        this.gain('build', dt * 0.5);
+        return game.research.check();
+      }, label: 'research' });
     } else if (job.type === 'operate') {
       steps.push({ go: path });
       steps.push({ act: (dt) => {
-        const st = world.bdata.get(job.y * W + job.x);
+        const st = world.bdata.get(job.k);
         if (!st || !st.built) return true;
         st.operating = 0.6;
         this.stamina -= 3 * dt;
@@ -326,7 +473,7 @@ export class Pawn {
 
   deliverToSite(world, job) {
     if (!this.carry) return;
-    const st = world.bdata.get(job.y * W + job.x);
+    const st = world.bdata.get(job.k);
     if (!st) { world.addItem(this.x, this.y, this.carry.res, this.carry.amt); this.carry = null; return; }
     if (!st.built) {
       st.delivered = st.delivered || {};
@@ -334,8 +481,10 @@ export class Pawn {
       const put = Math.min(need, this.carry.amt);
       st.delivered[this.carry.res] = (st.delivered[this.carry.res] || 0) + put;
       if (this.carry.amt - put > 0.01) world.addItem(this.x, this.y, this.carry.res, this.carry.amt - put);
-    } else if (st.def.farm && this.carry.res === 'dirt') {
-      st.planted = true; st.growth = 0;
+    } else if (st.def.farm) {
+      st.store[this.carry.res] = (st.store[this.carry.res] || 0) + this.carry.amt;
+      if (this.carry.res === 'ice') { st.store.water = (st.store.water || 0) + this.carry.amt; delete st.store.ice; }
+      if (!st.planted) { st.planted = true; st.growth = 0; }
     } else {
       st.store[this.carry.res] = (st.store[this.carry.res] || 0) + this.carry.amt;
     }

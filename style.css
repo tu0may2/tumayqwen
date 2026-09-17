@@ -23,7 +23,7 @@ canvas#view{position:absolute;inset:0;width:100%;height:100%;display:block;curso
   border-bottom:2px solid var(--edge);box-shadow:var(--shadow);z-index:5}
 .brand{font-weight:bold;letter-spacing:2px;color:var(--accent);font-size:18px}
 .brand span{color:var(--accent2)}
-.res{display:flex;gap:14px;flex:1;flex-wrap:wrap;font-size:13px}
+.res{display:flex;gap:8px;flex:1;flex-wrap:nowrap;overflow:hidden;font-size:12px}
 .res .r{display:flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--edge);
   border-radius:16px;padding:3px 10px}
 .res .r b{color:var(--accent);font-weight:600}
@@ -36,11 +36,11 @@ canvas#view{position:absolute;inset:0;width:100%;height:100%;display:block;curso
 .spd.active{background:var(--accent);color:#22313a;border-color:var(--accent);font-weight:bold}
 
 /* ---------- sidebar ---------- */
-#sidebar{position:absolute;top:60px;right:8px;width:270px;display:flex;flex-direction:column;gap:8px;z-index:4}
+#sidebar{position:absolute;top:60px;right:8px;bottom:120px;width:270px;display:flex;flex-direction:column;gap:8px;z-index:4;overflow-y:auto}
 .panel{background:rgba(20,40,47,.94);border:2px solid var(--edge);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
 .panel-title{background:var(--panel2);padding:6px 10px;font-size:12px;letter-spacing:1px;color:var(--accent2);
   text-transform:uppercase;border-bottom:1px solid var(--edge)}
-.panel-body{padding:8px 10px;font-size:12px;max-height:38vh;overflow:auto;line-height:1.5}
+.panel-body{padding:8px 10px;font-size:12px;max-height:34vh;overflow:auto;line-height:1.5}
 .panel-body::-webkit-scrollbar{width:7px}
 .panel-body::-webkit-scrollbar-thumb{background:var(--edge);border-radius:4px}
 .kv{display:flex;justify-content:space-between;gap:8px}
@@ -85,3 +85,15 @@ canvas#view{position:absolute;inset:0;width:100%;height:100%;display:block;curso
   border-radius:16px;font-size:12px;animation:pop .25s ease}
 .alert.info{background:rgba(20,45,50,.95);border-color:var(--accent2);color:#d6f6fa}
 @keyframes pop{from{opacity:0;transform:translateY(-6px)}to{opacity:1}}
+
+/* исследования и приоритеты */
+.tech{border:1px solid var(--edge);border-radius:8px;padding:5px 7px;margin-bottom:5px;background:var(--panel2);cursor:pointer}
+.tech:hover{border-color:var(--accent2)}
+.tech.active{border-color:var(--accent)}
+.tech.done{opacity:.55;cursor:default}
+.tech b{color:var(--accent2)}
+.tech .d{font-size:10px;color:var(--dim)}
+.prio{display:flex;flex-wrap:wrap;gap:3px;margin-top:4px}
+.prio span{font-size:10px;border:1px solid var(--edge);border-radius:6px;padding:1px 5px;cursor:pointer;background:#10232a}
+.prio span.off{opacity:.35;text-decoration:line-through}
+.tool.locked{opacity:.4;cursor:not-allowed}

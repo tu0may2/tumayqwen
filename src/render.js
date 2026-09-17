@@ -1,6 +1,7 @@
 // Отрисовка в духе Oxygen Not Included: мягкие тайлы, цветные газы, мультяшные дупликанты.
 import { W, H, TILE, MATS, BUILDINGS, GAS_CAP, RESOURCES } from './world.js';
 import { LIQ_FULL } from './fluid.js';
+import { PLANTS } from './plants.js';
 
 const hash = (x, y) => {
   let h = (x * 374761393 + y * 668265263) ^ 0x5bf03635;
@@ -54,7 +55,9 @@ export class Renderer {
     this.drawGas(ctx, x0, x1, y0, y1);
     this.drawLiquid(ctx, x0, x1, y0, y1, game);
     this.drawTiles(ctx, x0, x1, y0, y1);
+    this.drawConduits(ctx, x0, x1, y0, y1);
     this.drawBuildings(ctx, x0, x1, y0, y1);
+    this.drawCritters(ctx, game);
     this.drawItems(ctx, x0, x1, y0, y1);
     this.drawOrders(ctx, x0, x1, y0, y1);
     this.drawPawns(ctx, game);
@@ -64,21 +67,33 @@ export class Renderer {
     ctx.restore();
   }
 
+  /** Фон: космос там, где нет породы вообще, и «задняя стена» биома в выкопанном. */
   drawSky(ctx, x0, x1, y0, y1, game) {
-    const grad = ctx.createLinearGradient(0, y0 * TILE, 0, y1 * TILE);
+    const w = this.world;
     const night = game.cycleT > 0.75;
-    grad.addColorStop(0, night ? '#0a1230' : '#12304a');
-    grad.addColorStop(1, '#08131a');
-    ctx.fillStyle = grad;
-    ctx.fillRect(x0 * TILE, y0 * TILE, (x1 - x0 + 1) * TILE, (y1 - y0 + 1) * TILE);
-    // звёзды в космосе
-    for (let x = x0; x <= x1; x++) {
-      for (let y = y0; y <= Math.min(y1, 8); y++) {
-        const h = hash(x, y);
-        if (h > 0.93) {
-          ctx.fillStyle = `rgba(255,255,255,${0.25 + h * 0.5})`;
-          ctx.fillRect(x * TILE + h * 12, y * TILE + (h * 91 % 12), 1.4, 1.4);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = y * W + x;
+        const px = x * TILE, py = y * TILE;
+        const bm = w.back[i];
+        if (!bm) {
+          const k = Math.min(1, y / 16);
+          const c = night ? [10, 16, 40] : [20, 52, 84];
+          ctx.fillStyle = `rgb(${(c[0] * (1 - k) + 6 * k) | 0},${(c[1] * (1 - k) + 14 * k) | 0},${(c[2] * (1 - k) + 22 * k) | 0})`;
+          ctx.fillRect(px, py, TILE, TILE);
+          const h = hash(x, y);
+          if (h > 0.93 && y < 12) {
+            ctx.fillStyle = `rgba(255,255,255,${0.25 + h * 0.5})`;
+            ctx.fillRect(px + h * 12, py + (h * 91 % 12), 1.4, 1.4);
+          }
+          continue;
         }
+        const def = MATS[bm];
+        const h = hash(x + 7, y - 3);
+        ctx.fillStyle = shade(h > 0.5 ? def.color2 : def.color, 0.34);
+        ctx.fillRect(px, py, TILE, TILE);
+        ctx.fillStyle = 'rgba(0,0,0,.18)';
+        ctx.fillRect(px, py, TILE, 1.5);
       }
     }
   }
@@ -104,6 +119,12 @@ export class Renderer {
         }
         if (!w.mat[i - 1]) { ctx.fillStyle = 'rgba(255,255,255,.06)'; ctx.fillRect(x * TILE, y * TILE, 1.6, TILE); }
         if (!w.mat[(y + 1) * W + x]) { ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.fillRect(x * TILE, y * TILE + TILE - 2, TILE, 2); }
+        // обводка по границе с пустотой — «блочный» силуэт как в ONI
+        if (!w.mat[i - 1] || !w.mat[i + 1] || !w.mat[i - W] || !w.mat[i + W]) {
+          ctx.strokeStyle = 'rgba(0,0,0,.32)';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(x * TILE + .5, y * TILE + .5, TILE - 1, TILE - 1);
+        }
         const dp = w.digProg[i];
         if (dp > 0) {
           ctx.strokeStyle = `rgba(255,180,60,${0.25 + dp / 20})`;
@@ -126,8 +147,8 @@ export class Renderer {
         const o = w.o2[i], c = w.co2[i], st = w.steam[i], h = w.h2[i];
         if (o + c + st + h < 0.02) continue;
         const px = x * TILE, py = y * TILE;
-        if (o > 0.02) { ctx.fillStyle = `rgba(120,200,235,${Math.min(0.5, (o / GAS_CAP) * 0.38)})`; ctx.fillRect(px, py, TILE, TILE); }
-        if (c > 0.05) { ctx.fillStyle = `rgba(110,110,120,${Math.min(0.55, (c / GAS_CAP) * 0.5)})`; ctx.fillRect(px, py, TILE, TILE); }
+        if (o > 0.02) { ctx.fillStyle = `rgba(120,200,235,${Math.min(0.16, (o / GAS_CAP) * 0.13)})`; ctx.fillRect(px, py, TILE, TILE); }
+        if (c > 0.05) { ctx.fillStyle = `rgba(105,100,95,${Math.min(0.42, (c / GAS_CAP) * 0.38)})`; ctx.fillRect(px, py, TILE, TILE); }
         if (st > 0.02) { ctx.fillStyle = `rgba(232,240,245,${Math.min(0.6, st * 0.5)})`; ctx.fillRect(px, py, TILE, TILE); }
         if (h > 0.02) { ctx.fillStyle = `rgba(200,160,235,${Math.min(0.5, h * 0.6)})`; ctx.fillRect(px, py, TILE, TILE); }
       }
@@ -157,6 +178,70 @@ export class Renderer {
           ctx.fillRect(px, py + wave, TILE, 1.4);
         }
       }
+    }
+  }
+
+  /** Провода и трубы — тонкими линиями, соединяются с соседями. */
+  drawConduits(ctx, x0, x1, y0, y1) {
+    const w = this.world;
+    const styles = { power: ['#d8b25a', 2], liquid: ['#4d9ad6', 3.2], gas: ['#b98ad8', 3.2] };
+    for (const kind of ['liquid', 'gas', 'power']) {
+      const arr = w.cond[kind];
+      const [color, width] = styles[kind];
+      ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineCap = 'round';
+      const off = kind === 'power' ? -4 : kind === 'liquid' ? 0 : 4;
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          const i = y * W + x;
+          if (!arr[i]) continue;
+          const st = w.bdata.get(i * 4 + (kind === 'power' ? 1 : kind === 'liquid' ? 2 : 3));
+          ctx.globalAlpha = st && st.built ? 1 : 0.35;
+          const cx = x * TILE + TILE / 2, cy = y * TILE + TILE / 2 + off;
+          ctx.beginPath();
+          let linked = false;
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const n = (y + dy) * W + (x + dx);
+            if (!arr[n]) continue;
+            linked = true;
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx + dx * TILE / 2, cy + dy * TILE / 2);
+          }
+          if (!linked) { ctx.moveTo(cx - 3, cy); ctx.lineTo(cx + 3, cy); }
+          ctx.stroke();
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  drawCritters(ctx, game) {
+    for (const c of game.critters || []) {
+      const px = c.px * TILE + TILE / 2, py = c.py * TILE + TILE - 3;
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.fillStyle = 'rgba(0,0,0,.28)';
+      ctx.beginPath(); ctx.ellipse(0, 3, 5, 1.8, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = c.def.color;
+      if (c.sp === 'hatch') {
+        roundRect(ctx, -6, -6, 12, 8, 3.4); ctx.fill();
+        ctx.fillStyle = '#2c2119';
+        ctx.fillRect(-4 * c.dir, -4, 1.4, 1.4);
+        ctx.fillRect(-6, 1.5, 2, 2); ctx.fillRect(4, 1.5, 2, 2);
+      } else if (c.sp === 'puft') {
+        ctx.beginPath(); ctx.arc(0, -4, 5, 0, 7); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,.5)';
+        ctx.beginPath(); ctx.arc(-1.6, -5.4, 1.4, 0, 7); ctx.fill();
+      } else {
+        ctx.beginPath();
+        ctx.ellipse(0, -3, 5.5, 3, 0, 0, 7); ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(5 * c.dir, -3); ctx.lineTo(8 * c.dir, -5.5); ctx.lineTo(8 * c.dir, -0.5); ctx.closePath(); ctx.fill();
+      }
+      if (c.hunted) {
+        ctx.strokeStyle = '#ff6b5e'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(0, -3, 8, 0, 7); ctx.stroke();
+      }
+      ctx.restore();
     }
   }
 
@@ -209,6 +294,14 @@ export class Renderer {
     ctx.font = `${TILE - 5}px serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(def.icon, px + TILE / 2, py + TILE / 2 + 1);
+    if (def.farm && st.planted && st.plant) {
+      ctx.font = `${TILE - 6}px serif`;
+      ctx.fillText(PLANTS[st.plant]?.icon || '🌱', px + TILE / 2, py + TILE / 2 - 4);
+      if (st.wilt) {
+        ctx.fillStyle = '#ff6b5e';
+        ctx.beginPath(); ctx.arc(px + 3, py + 3, 1.8, 0, 7); ctx.fill();
+      }
+    }
     if (def.farm && st.planted) {
       const g = Math.min(1, st.growth);
       ctx.strokeStyle = '#8ada6a'; ctx.lineWidth = 1.6;
@@ -334,8 +427,8 @@ export class Renderer {
       for (let x = x0; x <= x1; x++) {
         const i = y * W + x;
         const l = w.light[i];
-        if (l > 0.55) continue;
-        ctx.fillStyle = `rgba(2,8,14,${(0.55 - l) * 0.62})`;
+        if (l > 0.5) continue;
+        ctx.fillStyle = `rgba(2,8,14,${(0.5 - l) * 0.5})`;
         ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
       }
     }
@@ -359,6 +452,14 @@ export class Renderer {
           gases.sort((a, b) => b[0] - a[0]);
           if (gases[0][0] < 0.01) continue;
           ctx.fillStyle = `rgba(${gases[0][1]},${Math.min(0.85, gases[0][0] / GAS_CAP)})`;
+          ctx.fillRect(px, py, TILE, TILE);
+        } else if (this.overlay === 'germs') {
+          const gm = w.germs[i];
+          if (gm < 1) continue;
+          ctx.fillStyle = `rgba(150,220,80,${Math.min(0.75, gm / 300)})`;
+          ctx.fillRect(px, py, TILE, TILE);
+        } else if (this.overlay === 'light') {
+          ctx.fillStyle = `rgba(255,230,140,${w.light[i] * 0.7})`;
           ctx.fillRect(px, py, TILE, TILE);
         } else if (this.overlay === 'temp') {
           const t = w.temp[i];
@@ -396,6 +497,13 @@ export class Renderer {
       ctx.strokeRect(t.x * TILE + .5, t.y * TILE + .5, TILE - 1, TILE - 1);
     }
   }
+}
+
+/** Затемнить hex-цвет: k — доля от исходной яркости. */
+function shade(hex, k) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = ((n >> 16) & 255) * k, g = ((n >> 8) & 255) * k, b = (n & 255) * k;
+  return `rgb(${r | 0},${g | 0},${b | 0})`;
 }
 
 function roundRect(ctx, x, y, w, h, r) {

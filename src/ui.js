@@ -1,16 +1,21 @@
 // Интерфейс: панели, инструменты, ввод мыши и клавиатуры.
-import { BUILDINGS, B_BY_KEY, MATS, RESOURCES, TILE, W } from './world.js';
+import { BUILDINGS, B_BY_KEY, MATS, RESOURCES, TILE, W, CAT } from './world.js';
 import { mass } from './util.js';
+import { JOB_ORDER, JOB_LABEL } from './jobs.js';
+import { TECHS } from './research.js';
+import { PLANTS } from './plants.js';
 
 const TABS = [
   { name: 'Приказы', tools: [
     { key: 'select', icon: '🔍', name: 'Осмотр' },
     { key: 'dig',    icon: '⛏', name: 'Копать' },
+    { key: 'hunt',   icon: '🏹', name: 'Отлов' },
     { key: 'cancel', icon: '✖',  name: 'Отмена' },
     { key: 'decon',  icon: '🔨', name: 'Разобрать' },
   ]},
-  { name: 'Строительство', tools: ['ladder', 'tile', 'bed', 'bin', 'ration', 'table', 'lamp'] },
-  { name: 'Производство', tools: ['diffuser', 'skimmer', 'generator', 'battery', 'farm'] },
+  ...Object.entries(CAT).map(([cat, name]) => ({
+    name, tools: BUILDINGS.filter(b => b && b.cat === cat).map(b => b.key),
+  })),
 ];
 
 export class UI {
@@ -41,13 +46,19 @@ export class UI {
     for (const t of TABS[this.tab].tools) {
       const def = typeof t === 'string' ? B_BY_KEY[t] : null;
       const key = def ? def.key : t.key;
+      const locked = def && !this.game.research.unlocked(def);
       const el = document.createElement('div');
-      el.className = 'tool' + (this.tool.key === key ? ' active' : '');
+      el.className = 'tool' + (this.tool.key === key ? ' active' : '') + (locked ? ' locked' : '');
+      el.title = def ? `${def.name}${locked ? ' — нужно исследование' : ''}` : t.name;
       el.innerHTML = def
-        ? `<div class="ic">${def.icon}</div><div class="nm">${def.name}</div>
+        ? `<div class="ic">${locked ? '🔒' : def.icon}</div><div class="nm">${def.name}</div>
            <div class="cost">${Object.entries(def.cost).map(([r, a]) => `${a}${RESOURCES[r].icon}`).join(' ')}</div>`
         : `<div class="ic">${t.icon}</div><div class="nm">${t.name}</div><div class="cost">&nbsp;</div>`;
-      el.onclick = () => { this.tool = def ? { key: def.key, build: def } : { key: t.key }; this.buildTools(); };
+      el.onclick = () => {
+        if (locked) return;
+        this.tool = def ? { key: def.key, build: def } : { key: t.key };
+        this.buildTools();
+      };
       host.appendChild(el);
     }
     document.getElementById('hint').textContent = this.tool.build
@@ -144,6 +155,7 @@ export class UI {
           case 'dig': g.orderDig(x, y); break;
           case 'cancel': g.cancel(x, y); break;
           case 'decon': g.orderDeconstruct(x, y); break;
+          case 'hunt': g.orderHunt(x, y); break;
           default: if (this.tool.build) g.place(x, y, this.tool.build.key);
         }
       }
@@ -171,7 +183,7 @@ export class UI {
     if (t && w.inside(t.x, t.y)) {
       const i = w.idx(t.x, t.y);
       const m = MATS[w.mat[i]];
-      const st = w.bdata.get(i);
+      const st = w.bstate(t.x, t.y) || w.allAt(t.x, t.y)[0];
       const pile = w.items.get(i);
       const rows = [];
       rows.push(kv('Тайл', `${t.x}, ${t.y}`));
@@ -183,6 +195,7 @@ export class UI {
       rows.push(kv('Вода', `${w.water[i].toFixed(1)} кг${w.pwater[i] > 0.4 ? ' (грязная)' : ''}`));
       rows.push(kv('Температура', `${w.temp[i].toFixed(1)} °C`));
       rows.push(kv('Свет', `${Math.round(w.light[i] * 100)} %`));
+      if (w.germs[i] > 1) rows.push(kv('Микробы', Math.round(w.germs[i])));
       if (w.dig[i]) rows.push(kv('Приказ', 'копать'));
       if (st) {
         rows.push('<div class="sep"></div>');
@@ -193,7 +206,27 @@ export class UI {
         if (st.def.storeJ) rows.push(kv('Заряд', `${(st.charge / 1000).toFixed(1)} кДж`));
         if (Object.keys(st.store || {}).length)
           rows.push(kv('Внутри', Object.entries(st.store).map(([r, a]) => `${Math.round(a)} ${RESOURCES[r].name}`).join(', ')));
-        if (st.def.farm) rows.push(kv('Рост', st.planted ? `${Math.round(st.growth * 100)}%` : 'нужен грунт'));
+        if (st.def.farm) {
+          rows.push(kv('Культура', st.plant ? `${PLANTS[st.plant].icon} ${PLANTS[st.plant].name}` : '—'));
+          rows.push(kv('Рост', st.planted ? `${Math.round(st.growth * 100)}%${st.wilt ? ` (${st.wilt})` : ''}` : 'нужен субстрат'));
+          if (st.plant) rows.push(kv('Требования', PLANTS[st.plant].hint));
+        }
+        for (const kind of ['power', 'liquid', 'gas']) {
+          const id = st.net?.[kind] ?? -1;
+          if (id < 0) continue;
+          const net = g.nets.net(kind, id);
+          const label = kind === 'power' ? 'Электросеть' : kind === 'liquid' ? 'Водопровод' : 'Газопровод';
+          rows.push(kv(label, kind === 'power'
+            ? `${Math.round(net.gen)}/${Math.round(net.demand)} Вт`
+            : Object.entries(net.buffer).map(([r, a]) => `${r} ${a.toFixed(1)}`).join(', ') || 'пусто'));
+        }
+      }
+      const cr = (g.critters || []).find(c => c.x === t.x && c.y === t.y);
+      if (cr) {
+        rows.push('<div class="sep"></div>');
+        rows.push(kv('Существо', cr.def.name));
+        rows.push(kv('Сытость', `${Math.round(cr.hunger / cr.def.hungerMax * 100)}%`));
+        if (cr.hunted) rows.push(kv('Метка', 'на отлов'));
       }
       if (pile) {
         rows.push('<div class="sep"></div>');
@@ -201,6 +234,24 @@ export class UI {
       }
       body.innerHTML = rows.join('');
     }
+
+    // исследования
+    const rb = document.getElementById('research-body');
+    const R = g.research;
+    rb.innerHTML = TECHS.map(t => {
+      const done = R.done.has(t.key);
+      const ready = t.req.every(r => R.done.has(r));
+      const cur = R.current?.key === t.key;
+      const pct = cur ? Math.round(R.progress / t.cost * 100) : 0;
+      return `<div class="tech ${done ? 'done' : ''} ${cur ? 'active' : ''}" data-tech="${t.key}">
+        <div><b>${t.name}</b> ${done ? '✔' : ready ? `${t.cost}` : '🔒'}</div>
+        <div class="d">${t.desc}</div>
+        ${cur ? `<div class="bar"><i style="width:${pct}%;background:var(--accent2)"></i></div>` : ''}
+      </div>`;
+    }).join('');
+    rb.querySelectorAll('.tech').forEach(el => {
+      el.onclick = () => { R.select(el.dataset.tech); this.lastUI = 1; };
+    });
 
     // колонисты
     const list = document.getElementById('colonist-list');
@@ -214,6 +265,9 @@ export class UI {
         <div>⛏ ${p.skills.dig.toFixed(1)} · 🔨 ${p.skills.build.toFixed(1)} · 🌱 ${p.skills.farm.toFixed(1)} · 📦 ${p.skills.haul.toFixed(1)}</div>
         <div class="blabel"><span>Настроение</span><span>${Math.round(p.mood)}</span></div>
         <div>${p.moodFactors.map(f => `<span style="color:${f[1] < 0 ? 'var(--bad)' : 'var(--good)'}">${f[0]} ${f[1] > 0 ? '+' : ''}${f[1]}</span>`).join(' · ')}</div>
+        ${p.sick ? `<div style="color:var(--bad)">Болезнь: ${p.sick.name}</div>` : ''}
+        <div class="blabel"><span>Работы (клик — вкл/выкл)</span></div>
+        <div class="prio">${JOB_ORDER.map(j => `<span class="${p.disabled[j] ? 'off' : ''}" data-pid="${p.id}" data-job="${j}">${JOB_LABEL[j] || j}</span>`).join('')}</div>
       ` : '';
       return `<div class="col-card ${sel ? 'sel' : ''}" data-id="${p.id}">
         <div class="col-head"><span class="col-name">${p.name}</span><span class="col-task">${p.statusText()}</span></div>
@@ -222,9 +276,20 @@ export class UI {
         ${bar('Силы', p.stamina, 100, '#8ad86a')}
         ${bar('Стресс', p.stress, 100, '#e8705c')}
         ${bar('Здоровье', p.health, 100, '#e86a9a')}
+        ${sel ? bar('Мочевой пузырь', p.bladder, 100, '#c8b45c') + bar('Гигиена', p.hygiene, 100, '#7ec8c8') + bar('Досуг', p.fun, 100, '#c58ae0') : ''}
         ${detail}
       </div>`;
     }).join('') || '<div>Колонистов нет.</div>';
+    list.querySelectorAll('.prio span').forEach(el => {
+      el.onclick = (e) => {
+        e.stopPropagation();
+        const p = g.pawns.find(x => x.id === +el.dataset.pid);
+        if (!p) return;
+        p.disabled[el.dataset.job] = !p.disabled[el.dataset.job];
+        p.dropJob(g);
+        this.lastUI = 1;
+      };
+    });
     list.querySelectorAll('.col-card').forEach(el => {
       el.onclick = () => { g.selected = g.pawns.find(p => p.id === +el.dataset.id); this.lastUI = 1; };
     });

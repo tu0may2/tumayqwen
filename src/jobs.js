@@ -1,12 +1,23 @@
 // Биржа работ: приказы копать/строить/таскать/собирать урожай/крутить генератор.
 import { W, BUILDINGS } from './world.js';
 import { findPath, accessCells } from './path.js';
+import { PLANTS } from './plants.js';
+const PLANT_NEEDS = Object.fromEntries(Object.entries(PLANTS).map(([k, p]) => [k, p.needs]));
+const PLANT_WATER = Object.fromEntries(Object.entries(PLANTS).map(([k, p]) => [k, p.water > 0]));
 
-export const JOB_ORDER = ['operate', 'supply', 'build', 'dig', 'harvest', 'deconstruct', 'haul'];
+export const JOB_ORDER = ['operate', 'hunt', 'cook', 'research', 'supply', 'build', 'dig', 'harvest', 'deconstruct', 'haul'];
+
+/** Нужен ли оператор станку (кухня, лаборатория). */
+function needsOperator(st, game) {
+  if (st.def.manualWork === 'cook') return (st.store.food || 0) >= 5 && (st.store.meal || 0) < 40;
+  if (st.def.manualWork === 'research') return !!game.research && !!game.research.current;
+  return false;
+}
 export const JOB_LABEL = {
   operate: 'Генератор', supply: 'Подвоз', build: 'Стройка', dig: 'Копает',
   harvest: 'Урожай', deconstruct: 'Разбор', haul: 'Переноска',
-  eat: 'Ест', sleep: 'Спит', breathe: 'Задыхается', idle: 'Без дела', walk: 'Идёт',
+  hunt: 'Охотится', eat: 'Ест', sleep: 'Спит', breathe: 'Задыхается', idle: 'Без дела', walk: 'Идёт',
+  cook: 'Готовит', research: 'Изучает', toilet: 'В уборной', wash: 'Моется', heal: 'Лечится', fun: 'Отдыхает',
 };
 
 export class JobBoard {
@@ -26,27 +37,39 @@ export class JobBoard {
     }
 
     // 2. стройплощадки: подвоз материалов, затем работа
-    for (const [i, st] of bdata) {
-      const x = i % W, y = (i / W) | 0;
-      if (st.remove) { jobs.push({ type: 'deconstruct', x, y, key: 'dec' + i }); continue; }
+    for (const [k, st] of bdata) {
+      const x = st.x, y = st.y;
+      if (st.remove) { jobs.push({ type: 'deconstruct', x, y, k, key: 'dec' + k }); continue; }
       if (st.built) {
-        if (st.def.farm && st.growth >= 1) jobs.push({ type: 'harvest', x, y, key: 'hv' + i });
+        if (st.def.farm && st.growth >= 1) jobs.push({ type: 'harvest', x, y, k, key: 'hv' + k });
         if (st.def.uses && (st.store[st.def.uses] || 0) < 20)
-          jobs.push({ type: 'supply', x, y, res: st.def.uses, amount: 20, key: 'sup' + i });
-        if (st.def.farm && !st.planted)
-          jobs.push({ type: 'supply', x, y, res: 'dirt', amount: 10, key: 'dirt' + i });
+          jobs.push({ type: 'supply', x, y, k, res: st.def.uses, amount: 20, key: 'sup' + k });
+        if (st.def.farm) {
+          const want = st.plant ? Object.keys(PLANT_NEEDS[st.plant] || { dirt: 1 })[0] : 'dirt';
+          if ((st.store[want] || 0) < 10) jobs.push({ type: 'supply', x, y, k, res: want, amount: 10, key: 'farm' + k });
+          if (st.plant && PLANT_WATER[st.plant] && (st.store.water || 0) < 5 && st.net?.liquid === -1)
+            jobs.push({ type: 'supply', x, y, k, res: 'ice', amount: 10, key: 'fw' + k });
+        }
         if (st.def.manual && game.power.deficit > 0)
-          jobs.push({ type: 'operate', x, y, key: 'op' + i });
+          jobs.push({ type: 'operate', x, y, k, key: 'op' + k });
+        if (st.def.manualWork === 'cook' && (st.store.food || 0) < 40)
+          jobs.push({ type: 'supply', x, y, k, res: 'food', amount: 40, key: 'sfood' + k });
+        if (st.def.manualWork && st.powered !== false && needsOperator(st, game))
+          jobs.push({ type: st.def.manualWork, x, y, k, key: 'mw' + k });
         continue;
       }
-      // недостроено
       let missing = null;
       for (const [res, amt] of Object.entries(st.def.cost)) {
         const have = st.delivered?.[res] || 0;
         if (have < amt) { missing = { res, amount: amt - have }; break; }
       }
-      if (missing) jobs.push({ type: 'supply', x, y, res: missing.res, amount: missing.amount, key: 'sup' + i, site: true });
-      else jobs.push({ type: 'build', x, y, key: 'bld' + i });
+      if (missing) jobs.push({ type: 'supply', x, y, k, res: missing.res, amount: missing.amount, key: 'sup' + k, site: true });
+      else jobs.push({ type: 'build', x, y, k, key: 'bld' + k });
+    }
+
+    // 2.5 охота
+    for (const c of game.critters || []) {
+      if (c.hunted && !c.dead) jobs.push({ type: 'hunt', x: c.x, y: c.y, cid: c.id, key: 'hunt' + c.id });
     }
 
     // 3. переноска: кучи на полу → склад
@@ -93,7 +116,7 @@ export class JobBoard {
 /** Проверка задачи по актуальному состоянию мира (список работ обновляется не каждый кадр). */
 export function stillValid(world, j) {
   const i = j.y * W + j.x;
-  const st = world.bdata.get(i);
+  const st = j.k !== undefined ? world.bdata.get(j.k) : null;
   switch (j.type) {
     case 'dig': return !!world.mat[i] && !!world.dig[i];
     case 'haul': return (world.items.get(i)?.[j.res] || 0) > 0.4;
@@ -101,6 +124,8 @@ export function stillValid(world, j) {
     case 'deconstruct': return !!st && !!st.remove;
     case 'harvest': return !!st && st.built && st.growth >= 1;
     case 'operate': return !!st && st.built;
+    case 'cook': return !!st && st.built && (st.store.food || 0) >= 5;
+    case 'research': return !!st && st.built;
     case 'supply': {
       if (!st) return false;
       if (!st.built) {
@@ -109,9 +134,11 @@ export function stillValid(world, j) {
         return (st.delivered?.[j.res] || 0) + 0.01 < need;
       }
       if (st.def.uses === j.res) return (st.store[j.res] || 0) < 20;
-      if (st.def.farm && j.res === 'dirt') return !st.planted;
+      if (st.def.manualWork === 'cook' && j.res === 'food') return (st.store.food || 0) < 40;
+      if (st.def.farm) return (st.store[j.res] || 0) < 10;
       return false;
     }
+    case 'hunt': return true;
     default: return true;
   }
 }

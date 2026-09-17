@@ -31,27 +31,11 @@ export const RESOURCES = {
   meal:   { name: 'Блюдо',      icon: '🍲' },
 };
 
-// ---------------------------------------------------------------- постройки
-// solid — перекрывает газ и проход; climb — по ней можно лезть вверх/вниз;
-// floor — на ней можно стоять; power < 0 — потребление, > 0 — выработка (Вт).
-export const BUILDINGS = [
-  null,
-  { id: 1, key: 'ladder',    name: 'Лестница',     icon: '🪜', cost: { stone: 3 },              work: 6,  climb: true,  floor: true },
-  { id: 2, key: 'tile',      name: 'Плитка',       icon: '🧱', cost: { stone: 5 },              work: 8,  solid: true },
-  { id: 3, key: 'bed',       name: 'Койка',        icon: '🛏', cost: { stone: 10 },             work: 12, floor: true, sleep: true },
-  { id: 4, key: 'bin',       name: 'Склад',        icon: '📦', cost: { stone: 15 },             work: 10, floor: true, store: 'mat', cap: 400 },
-  { id: 5, key: 'ration',    name: 'Холодильник',  icon: '🧺', cost: { copper: 10, stone: 10 }, work: 12, floor: true, store: 'food', cap: 60 },
-  { id: 6, key: 'diffuser',  name: 'Диффузор O₂',  icon: '💨', cost: { copper: 20 },            work: 16, floor: true, power: -120, uses: 'algae' },
-  { id: 7, key: 'generator', name: 'Ручной генератор', icon: '⚙️', cost: { stone: 20 },         work: 14, floor: true, power: 400, manual: true },
-  { id: 8, key: 'battery',   name: 'Батарея',      icon: '🔋', cost: { copper: 15 },            work: 12, floor: true, storeJ: 10000 },
-  { id: 9, key: 'farm',      name: 'Грядка',       icon: '🌱', cost: { dirt: 20 },              work: 14, floor: true, farm: true },
-  { id: 10, key: 'skimmer',  name: 'CO₂-фильтр',   icon: '🌀', cost: { copper: 20, stone: 10 }, work: 16, floor: true, power: -120, scrub: true },
-  { id: 11, key: 'table',    name: 'Стол',         icon: '🍴', cost: { stone: 8 },              work: 8,  floor: true, eat: true },
-  { id: 12, key: 'lamp',     name: 'Лампа',        icon: '💡', cost: { copper: 8 },             work: 6,  power: -20, light: 7 },
-];
-export const B_BY_KEY = {};
-for (const b of BUILDINGS) if (b) B_BY_KEY[b.key] = b;
+// Постройки вынесены в buildings.js
+export { BUILDINGS, B_BY_KEY, CAT } from './buildings.js';
+import { BUILDINGS, B_BY_KEY } from './buildings.js';
 
+export const LAYER = { power: 1, liquid: 2, gas: 3 };
 export const GAS_CAP = 2.2;      // кг/тайл — «комфортное» давление
 export const BREATH_MIN = 0.12;  // ниже этого дупликант задыхается
 
@@ -60,10 +44,16 @@ export class World {
     this.seed = seed;
     this.rng = makeRNG(seed || 1);
     this.mat = new Uint8Array(W * H);
+    this.back = new Uint8Array(W * H);      // «задняя стена» биома — фон за выкопанным
     this.digProg = new Float32Array(W * H);
     this.dig = new Uint8Array(W * H);       // помечено к добыче
-    this.bid = new Uint8Array(W * H);       // тип постройки
-    this.bdata = new Map();                 // idx -> состояние постройки
+    this.bid = new Uint8Array(W * H);       // здания (слой 0)
+    this.cond = {                            // слои коммуникаций, как в ONI
+      power: new Uint8Array(W * H),
+      liquid: new Uint8Array(W * H),
+      gas: new Uint8Array(W * H),
+    };
+    this.bdata = new Map();                 // key(x,y,layer) -> состояние постройки
     this.items = new Map();                 // idx -> {res: кг}
     this.o2 = new Float32Array(W * H);
     this.co2 = new Float32Array(W * H);
@@ -79,11 +69,30 @@ export class World {
   }
 
   idx(x, y) { return y * W + x; }
+  /** Ключ в bdata: слой 0 — здание, 1/2/3 — провод/труба/вентиляция. */
+  key(x, y, layer = 0) { return (y * W + x) * 4 + layer; }
+  static layerOf(def) { return def.conduit ? LAYER[def.conduit] : 0; }
+  stateAt(x, y, layer = 0) { return this.bdata.get(this.key(x, y, layer)) || null; }
   inside(x, y) { return x >= 0 && y >= 0 && x < W && y < H; }
   matAt(x, y) { return this.inside(x, y) ? this.mat[y * W + x] : 8; }
   buildAt(x, y) { return this.inside(x, y) ? this.bid[y * W + x] : 0; }
   bdef(x, y) { return BUILDINGS[this.buildAt(x, y)] || null; }
-  bstate(x, y) { return this.bdata.get(this.idx(x, y)) || null; }
+  bstate(x, y) { return this.bdata.get(this.key(x, y, 0)) || null; }
+  /** Все постройки тайла по слоям. */
+  allAt(x, y) {
+    const out = [];
+    for (let l = 0; l < 4; l++) { const st = this.bdata.get(this.key(x, y, l)); if (st) out.push(st); }
+    return out;
+  }
+
+  /** Тайл перекрывает газ и жидкость (порода, стена или закрытая дверь). */
+  gasBlocked(i) {
+    if (this.mat[i]) return true;
+    const b = BUILDINGS[this.bid[i]];
+    if (!b || (!b.solid && !b.door)) return false;
+    const st = this.bdata.get(i * 4);
+    return !!(st && st.built);
+  }
 
   /** Тайл непроходим (порода или достроенная стена). */
   solid(x, y) {
@@ -91,7 +100,7 @@ export class World {
     const i = y * W + x;
     if (this.mat[i]) return true;
     const b = BUILDINGS[this.bid[i]];
-    const st = this.bdata.get(i);
+    const st = this.bdata.get(i * 4);
     return !!(b && b.solid && st && st.built);
   }
 
@@ -99,15 +108,15 @@ export class World {
   standable(x, y) {
     if (this.solid(x, y)) return false;
     const b = BUILDINGS[this.bid[y * W + x]];
-    const st = this.bdata.get(y * W + x);
+    const st = this.bdata.get((y * W + x) * 4);
     if (b && b.climb && st && st.built) return true;
     if (this.solid(x, y + 1)) return true;
-    const bb = BUILDINGS[this.bid[(y + 1) * W + x]] , bs = this.bdata.get((y + 1) * W + x);
+    const bb = BUILDINGS[this.bid[(y + 1) * W + x]] , bs = this.bdata.get(((y + 1) * W + x) * 4);
     return !!(bb && (bb.floor || bb.climb) && bs && bs.built);
   }
 
   climbable(x, y) {
-    const b = BUILDINGS[this.bid[y * W + x]], st = this.bdata.get(y * W + x);
+    const b = BUILDINGS[this.bid[y * W + x]], st = this.bdata.get((y * W + x) * 4);
     return !!(b && b.climb && st && st.built);
   }
 
@@ -121,11 +130,10 @@ export class World {
 
         const depth = y / H;
         const surface = 8 + fbm(n1, x * 0.035, 0.5, 4) * 7;
-        if (y < surface) { this.mat[i] = 0; continue; }   // поверхностный вакуум/атмосфера
+        if (y < surface) { this.mat[i] = 0; this.back[i] = 0; continue; }   // космос над поверхностью
 
-        // пещеры
         const cave = fbm(n2, x * 0.07, y * 0.09, 4);
-        if (cave > 0.63 && y > surface + 3) { this.mat[i] = 0; continue; }
+        const hollow = cave > 0.63 && y > surface + 3;
 
         let m = 1;
         if (depth > 0.22) m = 2;
@@ -138,7 +146,8 @@ export class World {
         if (depth > 0.38 && depth < 0.62 && cave > 0.52 && cave <= 0.63) m = 9;  // болото со слизью
         if (depth > 0.38 && depth < 0.62 && ore > 0.62 && m === 2) m = 10;       // загрязнённый грунт
         if (depth > 0.92) m = 8;
-        this.mat[i] = m;
+        this.back[i] = m;
+        this.mat[i] = hollow ? 0 : m;
         this.temp[i] = MATS[m].heat;
       }
     }
@@ -149,7 +158,11 @@ export class World {
       for (let x = cx - 11; x <= cx + 11; x++) {
         if (!this.inside(x, y)) continue;
         const d = ((x - cx) / 11) ** 2 + ((y - cy) / 6) ** 2;
-        if (d < 1) { const i = y * W + x; this.mat[i] = 0; this.o2[i] = 1.8; this.temp[i] = 22; }
+        if (d < 1) {
+          const i = y * W + x;
+          if (!this.back[i]) this.back[i] = 1;
+          this.mat[i] = 0; this.o2[i] = 1.8; this.temp[i] = 22;
+        }
       }
     }
     // пол каверны
@@ -169,7 +182,7 @@ export class World {
         if (!roof) continue;
         this.water[i] = 1000;
         this.temp[i] = y / H > 0.8 ? 6 : 18;
-        if (y / H > 0.72 && ((x * 31 + y * 17) % 7 === 0)) this.pwater[i] = 1;  // грязные линзы
+        if (y / H > 0.72 && ((x * 31 + y * 17) % 7 === 0)) { this.pwater[i] = 1; this.germs[i] = 200; }
       }
     }
 
@@ -222,27 +235,35 @@ export class World {
 
   // -------------------------------------------------------------- постройки
   canPlace(x, y, def) {
-    if (!this.inside(x, y) || this.mat[this.idx(x, y)]) return false;
-    if (this.bid[this.idx(x, y)]) return false;
-    if (def.key === 'ladder' || def.solid) return true;
+    const i = this.idx(x, y);
+    if (!this.inside(x, y) || this.mat[i]) return false;
+    if (def.conduit) return !this.cond[def.conduit][i];
+    if (this.bid[i]) return false;
+    if (def.climb || def.solid || def.door) return true;
     return this.standable(x, y) || this.solid(x, y + 1);
   }
 
   place(x, y, def) {
     const i = this.idx(x, y);
-    this.bid[i] = def.id;
-    this.bdata.set(i, { built: false, prog: 0, def, x, y, store: {}, charge: 0, growth: 0, powered: false });
+    const layer = World.layerOf(def);
+    if (def.conduit) this.cond[def.conduit][i] = def.id; else this.bid[i] = def.id;
+    this.bdata.set(this.key(x, y, layer),
+      { built: false, prog: 0, def, x, y, layer, store: {}, charge: 0, growth: 0, powered: false, net: {} });
+    this.netDirty = true;
   }
 
-  removeBuilding(x, y) {
+  removeBuilding(x, y, layer = 0) {
     const i = this.idx(x, y);
-    const st = this.bdata.get(i);
-    if (st && st.built) {
+    const k = this.key(x, y, layer);
+    const st = this.bdata.get(k);
+    if (!st) return;
+    if (st.built) {
       for (const [res, amt] of Object.entries(st.def.cost)) this.addItem(x, y, res, amt * 0.5);
       for (const [res, amt] of Object.entries(st.store || {})) this.addItem(x, y, res, amt);
     }
-    this.bid[i] = 0;
-    this.bdata.delete(i);
+    if (st.def.conduit) this.cond[st.def.conduit][i] = 0; else this.bid[i] = 0;
+    this.bdata.delete(k);
+    this.netDirty = true;
   }
 
   /** Добыча тайла: возвращает true, когда порода разрушена. */
@@ -255,6 +276,7 @@ export class World {
     this.mat[i] = 0;
     this.digProg[i] = 0;
     this.dig[i] = 0;
+    if (m.germs) this.germs[i] += 250;          // вскрытая слизь пылит микробами
     if (m.yield) this.addItem(x, y, m.yield, m.amount);
     this.temp[i] = m.heat;
     return true;
