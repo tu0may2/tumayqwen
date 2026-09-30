@@ -215,6 +215,7 @@ function stepPhases(world, dt) {
           if (world.phase[i] >= ICE_MASS) {
             mat[i] = 0; world.digProg[i] = 0; world.phase[i] = 0;
             water[i] += ICE_MASS; temp[i] = 0;
+            world.markDirty(x, y);
           }
         } else if (world.phase[i] > 0) {
           world.phase[i] = Math.max(0, world.phase[i] - 5 * dt);  // подмерзает обратно
@@ -234,6 +235,7 @@ function stepPhases(world, dt) {
           temp[i] += frozen * L_FUSION / (water[i] * C_WATER + 1);
           if (world.phase[i] >= ICE_MASS * 0.8 && water[i] < 30 && !world.bid[i]) {
             mat[i] = 6; world.phase[i] = 0; water[i] = 0; temp[i] = Math.min(temp[i], -0.5);
+            world.markDirty(x, y);
             continue;
           }
         }

@@ -8,7 +8,9 @@ const game = new Game(seed);
 const renderer = new Renderer(document.getElementById('view'), game.world);
 const ui = new UI(game, renderer);
 
-window.game = game;   // для отладки из консоли
+window.game = game;          // для отладки из консоли
+window.renderer = renderer;
+window.ui = ui;
 
 let prev = performance.now();
 function frame(now) {

@@ -6,13 +6,13 @@ export const W = 128, H = 84, TILE = 16;
 // ---------------------------------------------------------------- материалы
 export const MATS = [
   null, // 0 — пустота (газ)
-  { id: 1, name: 'Грунт',        color: '#6d4a2f', color2: '#553823', hard: 1.0, yield: 'dirt',   amount: 8,  heat: 25 },
-  { id: 2, name: 'Песчаник',     color: '#9a8560', color2: '#7a684a', hard: 1.6, yield: 'stone',  amount: 10, heat: 22 },
-  { id: 3, name: 'Гранит',       color: '#7b8592', color2: '#5e6773', hard: 2.8, yield: 'stone',  amount: 14, heat: 20 },
+  { id: 1, name: 'Грунт',        color: '#7c5230', color2: '#573720', hard: 1.0, yield: 'dirt',   amount: 8,  heat: 25 },
+  { id: 2, name: 'Песчаник',     color: '#ab9060', color2: '#836c44', hard: 1.6, yield: 'stone',  amount: 10, heat: 22 },
+  { id: 3, name: 'Гранит',       color: '#78879b', color2: '#566072', hard: 2.8, yield: 'stone',  amount: 14, heat: 20 },
   { id: 4, name: 'Угольный пласт', color: '#3a3a40', color2: '#26262b', hard: 2.0, yield: 'coal', amount: 10, heat: 21 },
-  { id: 5, name: 'Медная руда',  color: '#b4703c', color2: '#8c5329', hard: 2.4, yield: 'copper', amount: 10, heat: 21 },
-  { id: 6, name: 'Лёд',          color: '#a8dced', color2: '#7fc0d6', hard: 0.7, yield: 'ice',    amount: 8,  heat: -8 },
-  { id: 7, name: 'Водорослевый нарост', color: '#5d8f4e', color2: '#436b38', hard: 1.1, yield: 'algae', amount: 8, heat: 23 },
+  { id: 5, name: 'Медная руда',  color: '#c0752f', color2: '#8e5020', hard: 2.4, yield: 'copper', amount: 10, heat: 21 },
+  { id: 6, name: 'Лёд',          color: '#a6e2f5', color2: '#74c2dc', hard: 0.7, yield: 'ice',    amount: 8,  heat: -8 },
+  { id: 7, name: 'Водорослевый нарост', color: '#5e9c46', color2: '#3f6f32', hard: 1.1, yield: 'algae', amount: 8, heat: 23 },
   { id: 8, name: 'Абиссалит',    color: '#4b4258', color2: '#372f42', hard: Infinity, yield: null, amount: 0, heat: 18 },
   { id: 9, name: 'Слизь',        color: '#6f8f4a', color2: '#55703a', hard: 0.9, yield: 'slime',  amount: 8,  heat: 26, germs: 'slimelung' },
   { id: 10, name: 'Загрязнённый грунт', color: '#5a5a33', color2: '#444427', hard: 1.0, yield: 'pdirt', amount: 8, heat: 24, germs: 'food' },
@@ -65,12 +65,19 @@ export class World {
     this.germs = new Float32Array(W * H);   // условные единицы микробов
     this.phase = new Float32Array(W * H);   // накопленный фазовый переход (таяние/замерзание), кг
     this.vents = [];
+    this.dirtyChunks = new Set();   // какие куски ландшафта перерисовать
     this.temp = new Float32Array(W * H);
     this.light = new Float32Array(W * H);
     this.generate();
   }
 
   idx(x, y) { return y * W + x; }
+  /** Пометить тайл как изменившийся — рендер перерисует его кусок карты. */
+  markDirty(x, y) {
+    const cx = x >> 4, cy = y >> 4;
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dy = -1; dy <= 1; dy++) this.dirtyChunks.add(((cy + dy) << 8) | (cx + dx));
+  }
   /** Ключ в bdata: слой 0 — здание, 1/2/3 — провод/труба/вентиляция. */
   key(x, y, layer = 0) { return (y * W + x) * 8 + layer; }
   static layerOf(def) { return def.conduit ? LAYER[def.conduit] : 0; }
@@ -261,6 +268,7 @@ export class World {
 
   place(x, y, def) {
     const i = this.idx(x, y);
+    this.markDirty(x, y);
     const layer = World.layerOf(def);
     if (def.conduit) this.cond[def.conduit][i] = def.id; else this.bid[i] = def.id;
     this.bdata.set(this.key(x, y, layer),
@@ -270,6 +278,7 @@ export class World {
 
   removeBuilding(x, y, layer = 0) {
     const i = this.idx(x, y);
+    this.markDirty(x, y);
     const k = this.key(x, y, layer);
     const st = this.bdata.get(k);
     if (!st) return;
@@ -288,6 +297,7 @@ export class World {
     const m = MATS[this.mat[i]];
     if (!m || m.hard === Infinity) return false;
     this.digProg[i] += work / m.hard;
+    this.markDirty(x, y);
     if (this.digProg[i] < 10) return false;
     this.mat[i] = 0;
     this.digProg[i] = 0;

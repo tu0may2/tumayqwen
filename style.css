@@ -86,6 +86,7 @@ canvas#view{position:absolute;inset:0;width:100%;height:100%;display:block;curso
   border-radius:16px;font-size:12px;animation:pop .25s ease}
 .alert.info{background:rgba(20,45,50,.95);border-color:var(--accent2);color:#d6f6fa}
 @keyframes pop{from{opacity:0;transform:translateY(-6px)}to{opacity:1}}
+.alert.fade{opacity:0;transform:translateY(-4px);transition:opacity .35s ease,transform .35s ease}
 
 /* исследования и приоритеты */
 .tech{border:1px solid var(--edge);border-radius:8px;padding:5px 7px;margin-bottom:5px;background:var(--panel2);cursor:pointer}

@@ -27,6 +27,7 @@ export class UI {
     this.buildTabs(); this.buildTools();
     this.bindInput();
     this.lastUI = 0;
+    this.cache = {};       // последняя разметка панелей — без неё они мигали каждый кадр
   }
 
   // --------------------------------------------------------------- панели
@@ -167,6 +168,30 @@ export class UI {
       b.classList.toggle('active', +b.dataset.speed === this.game.speed));
   }
 
+  /** Оповещения живут собственными узлами: новые появляются, старые исчезают,
+   *  остальные не трогаем — иначе анимация перезапускается и надпись дёргается. */
+  syncAlerts(g) {
+    const host = document.getElementById('alerts');
+    const live = g.alerts.filter(a => g.time - a.t < 12);
+    const seen = new Set();
+    for (const a of live) {
+      const key = `${a.t.toFixed(2)}|${a.text}`;
+      seen.add(key);
+      if (host.querySelector(`[data-key="${CSS.escape(key)}"]`)) continue;
+      const el = document.createElement('div');
+      el.className = 'alert' + (a.info ? ' info' : '');
+      el.dataset.key = key;
+      el.textContent = a.text;
+      host.appendChild(el);
+    }
+    for (const el of [...host.children]) {
+      if (seen.has(el.dataset.key) || el.dataset.fading) continue;
+      el.dataset.fading = '1';
+      el.classList.add('fade');
+      setTimeout(() => el.remove(), 400);
+    }
+  }
+
   selectAt(t) {
     const g = this.game;
     let best = null, bd = 2.2;
@@ -195,19 +220,32 @@ export class UI {
   }
 
   // --------------------------------------------------------------- вывод
+  /** Обновить панель, только если её содержимое изменилось. */
+  setHTML(id, html) {
+    if (this.cache[id] === html) return false;
+    this.cache[id] = html;
+    document.getElementById(id).innerHTML = html;
+    return true;
+  }
+
+  setText(id, text) {
+    if (this.cache['t:' + id] === text) return;
+    this.cache['t:' + id] = text;
+    document.getElementById(id).textContent = text;
+  }
+
   update(dt) {
     this.lastUI += dt;
     if (this.lastUI < 0.2) return;
     this.lastUI = 0;
     const g = this.game, w = g.world;
 
-    document.getElementById('cycle').textContent =
-      `Цикл ${g.cycle} · ${g.cycleT > 0.75 ? 'ночь' : 'день'} · ${g.pawns.length} дупл.`;
+    this.setText('cycle', `Цикл ${g.cycle} · ${g.cycleT > 0.75 ? 'ночь' : 'день'} · ${g.pawns.length} дупл.`);
 
     const res = ['food', 'stone', 'copper', 'dirt', 'coal', 'algae', 'ice'];
-    document.getElementById('resbar').innerHTML =
+    this.setHTML('resbar',
       res.map(r => `<div class="r"><i>${RESOURCES[r].icon}</i>${RESOURCES[r].name} <b>${Math.round(g.stock(r))}</b></div>`).join('') +
-      `<div class="r"><i>⚡</i><b>${Math.round(g.power.gen)}</b>/${Math.round(g.power.demand)} Вт · ${(g.power.stored / 1000).toFixed(1)} кДж</div>`;
+      `<div class="r"><i>⚡</i><b>${Math.round(g.power.gen)}</b>/${Math.round(g.power.demand)} Вт · ${(g.power.stored / 1000).toFixed(1)} кДж</div>`);
 
     // инспектор
     const t = g.hover;
@@ -270,23 +308,25 @@ export class UI {
         rows.push('<div class="sep"></div>');
         rows.push(kv('На полу', Object.entries(pile).map(([r, a]) => `${Math.round(a)} ${RESOURCES[r].name}`).join(', ')));
       }
-      body.innerHTML = rows.join('');
+      this.setHTML('inspector-body', rows.join(''));
     }
 
     // расписание
     const strip = document.getElementById('schedule-strip');
     const nowSlot = Math.min(11, Math.floor(g.cycleT * 12));
-    strip.innerHTML = g.schedule.slots.map((k, idx) =>
+    const stripHTML = g.schedule.slots.map((k, idx) =>
       `<div class="${idx === nowSlot ? 'now' : ''}" data-slot="${idx}" title="${BLOCKS[k].name}"
         style="background:${BLOCKS[k].color}33;border-color:${BLOCKS[k].color}">${BLOCKS[k].icon}</div>`).join('');
-    strip.querySelectorAll('div').forEach(el => {
-      el.onclick = () => { g.schedule.cycle(+el.dataset.slot); this.lastUI = 1; };
-    });
+    if (this.setHTML('schedule-strip', stripHTML)) {
+      strip.querySelectorAll('div').forEach(el => {
+        el.onclick = () => { g.schedule.cycle(+el.dataset.slot); this.lastUI = 1; };
+      });
+    }
 
     // исследования
     const rb = document.getElementById('research-body');
     const R = g.research;
-    rb.innerHTML = TECHS.map(t => {
+    const techHTML = TECHS.map(t => {
       const done = R.done.has(t.key);
       const ready = t.req.every(r => R.done.has(r));
       const cur = R.current?.key === t.key;
@@ -297,13 +337,15 @@ export class UI {
         ${cur ? `<div class="bar"><i style="width:${pct}%;background:var(--accent2)"></i></div>` : ''}
       </div>`;
     }).join('');
-    rb.querySelectorAll('.tech').forEach(el => {
-      el.onclick = () => { R.select(el.dataset.tech); this.lastUI = 1; };
-    });
+    if (this.setHTML('research-body', techHTML)) {
+      rb.querySelectorAll('.tech').forEach(el => {
+        el.onclick = () => { R.select(el.dataset.tech); this.lastUI = 1; };
+      });
+    }
 
     // колонисты
     const list = document.getElementById('colonist-list');
-    list.innerHTML = g.pawns.map(p => {
+    const listHTML = g.pawns.map(p => {
       const sel = g.selected === p;
       const detail = sel ? `
         <div class="sep"></div>
@@ -336,6 +378,7 @@ export class UI {
         ${detail}
       </div>`;
     }).join('') || '<div>Колонистов нет.</div>';
+    if (this.setHTML('colonist-list', listHTML)) {
     list.querySelectorAll('.prio span').forEach(el => {
       el.onclick = (e) => {
         e.stopPropagation();
@@ -350,11 +393,10 @@ export class UI {
     list.querySelectorAll('.col-card').forEach(el => {
       el.onclick = () => { g.selected = g.pawns.find(p => p.id === +el.dataset.id); this.lastUI = 1; };
     });
+    }
 
     // оповещения
-    const al = document.getElementById('alerts');
-    al.innerHTML = g.alerts.filter(a => g.time - a.t < 12)
-      .map(a => `<div class="alert ${a.info ? 'info' : ''}">${a.text}</div>`).join('');
+    this.syncAlerts(g);
   }
 }
 

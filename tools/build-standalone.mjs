@@ -10,13 +10,22 @@ const args = process.argv.slice(2);
 const artifact = args.includes('--artifact');
 const out = args.find(a => !a.startsWith('--')) || join(root, 'deepcolony.html');
 
-// порядок = порядок зависимостей (циклов между модулями нет)
-const ORDER = [
-  'util.js', 'buildings.js', 'world.js', 'fluid.js', 'plants.js', 'path.js',
-  'network.js', 'research.js', 'schedule.js', 'social.js', 'rooms.js',
-  'critters.js', 'jobs.js', 'machines.js', 'pawn.js', 'game.js', 'save.js',
-  'render.js', 'ui.js', 'main.js',
-];
+/** Порядок модулей выводим из их же импортов, чтобы ничего не забыть вручную. */
+function moduleOrder(entry = 'main.js') {
+  const order = [], seen = new Set();
+  const visit = (name, stack = []) => {
+    if (seen.has(name)) return;
+    if (stack.includes(name)) throw new Error(`цикл импортов: ${[...stack, name].join(' → ')}`);
+    const code = readFileSync(join(root, 'src', name), 'utf8');
+    for (const m of code.matchAll(/from\s*['"]\.\/([\w.-]+\.js)['"]/g)) visit(m[1], [...stack, name]);
+    seen.add(name);
+    order.push(name);
+  };
+  visit(entry);
+  return order;
+}
+
+const ORDER = moduleOrder();
 
 /** Убрать import/export: в одном файле всё живёт в общей области видимости. */
 function stripModuleSyntax(code) {

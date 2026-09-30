@@ -1,5 +1,5 @@
 // Дупликант: потребности, характер, навыки и исполнение задач.
-import { W, BREATH_MIN, BUILDINGS } from './world.js';
+import { W, BREATH_MIN, BUILDINGS, MATS } from './world.js';
 import { findPath, accessCells } from './path.js';
 import { JOB_LABEL, storageFor, findResource, reachableResource, reachableStorage } from './jobs.js';
 import { randomName, pick, clamp } from './util.js';
@@ -434,8 +434,14 @@ export class Pawn {
       steps.push({ go: path });
       steps.push({ act: (dt) => {
         if (!world.mat[job.y * W + job.x]) return true;
+        const mat = world.mat[job.y * W + job.x];
         const done = world.mine(job.x, job.y, this.workRate('dig') * dt * 4);
         this.gain('dig', dt);
+        this.dustAt = (this.dustAt || 0) - dt;
+        if (this.dustAt <= 0) {
+          this.dustAt = 0.22;
+          game.fx.push({ x: job.x, y: job.y, big: done, color: MATS[mat]?.color || '#c8b49a' });
+        }
         return done;
       }, label: 'dig' });
     } else if (job.type === 'build') {

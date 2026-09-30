@@ -1,14 +1,29 @@
-// Отрисовка в духе Oxygen Not Included: мягкие тайлы, цветные газы, мультяшные дупликанты.
-import { W, H, TILE, MATS, BUILDINGS, GAS_CAP, RESOURCES } from './world.js';
+// Отрисовка: процедурные текстуры пород, мягкий свет, объёмная вода, частицы.
+import { W, H, TILE, MATS, BUILDINGS, GAS_CAP, RESOURCES, LAYER } from './world.js';
 import { LIQ_FULL } from './fluid.js';
 import { PLANTS } from './plants.js';
-import { LAYER } from './world.js';
+import { TextureSet } from './textures.js';
+import { makeRNG, makeNoise2D, fbm } from './util.js';
 
 const hash = (x, y) => {
   let h = (x * 374761393 + y * 668265263) ^ 0x5bf03635;
   h = (h ^ (h >> 13)) * 1274126177;
   return ((h ^ (h >> 16)) >>> 0) / 4294967296;
 };
+
+// цвета ресурсов для кусков на полу
+const RES_COLOR = {
+  dirt: ['#7a5334', '#4d3220'], stone: ['#9aa0a8', '#5f666e'], coal: ['#3c3c42', '#1d1d21'],
+  copper: ['#c87a3c', '#8a4f22'], ice: ['#bfe6f5', '#7fc0d6'], algae: ['#6fa554', '#436b38'],
+  slime: ['#86a955', '#55703a'], pdirt: ['#6c6c3c', '#414127'],
+  food: ['#cfa14e', '#8c6a28'], meal: ['#e0b45c', '#9c7128'],
+};
+
+function makeBuffer(w, h) {
+  const c = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(w, h)
+    : Object.assign(document.createElement('canvas'), { width: w, height: h });
+  return c;
+}
 
 export class Renderer {
   constructor(canvas, world) {
@@ -17,8 +32,32 @@ export class Renderer {
     this.world = world;
     this.cam = { x: world.start.x * TILE, y: world.start.y * TILE, z: 1.6 };
     this.overlay = 'none';
+    this.tex = new TextureSet();
+    this.shade = this.makeShadeMap();     // крупные пятна освещённости породы
+    this.particles = [];
+    this.chunks = new Map();          // кеш кусков ландшафта: рисуем только изменившиеся
+    this.chunkScale = 2;
+    this.last = performance.now();
+    this.t = 0;
+
+    // буферы «на тайл» — их растягивание даёт мягкие градиенты газа и света
+    this.gasBuf = makeBuffer(W, H);
+    this.gasCtx = this.gasBuf.getContext('2d');
+    this.lightBuf = makeBuffer(W, H);
+    this.lightCtx = this.lightBuf.getContext('2d');
+
     this.resize();
     window.addEventListener('resize', () => this.resize());
+  }
+
+  /** Низкочастотная карта оттенков: породa не выглядит одинаковой на всю пещеру. */
+  makeShadeMap() {
+    const n = makeNoise2D(makeRNG(0x51ade));
+    const map = new Float32Array(W * H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) map[y * W + x] = (fbm(n, x * 0.09, y * 0.09, 3) - 0.5) * 2;
+    }
+    return map;
   }
 
   resize() {
@@ -35,11 +74,17 @@ export class Renderer {
     return { x: Math.floor(wx / TILE), y: Math.floor(wy / TILE) };
   }
 
+  // ------------------------------------------------------------------ кадр
   draw(game) {
-    const { ctx, world } = this;
+    const now = performance.now();
+    const dt = Math.min(0.1, (now - this.last) / 1000);
+    this.last = now;
+    this.t += dt;
+
+    const { ctx } = this;
     const z = this.cam.z * this.dpr;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = '#060c10';
+    ctx.fillStyle = '#05090d';
     ctx.fillRect(0, 0, this.c.width, this.c.height);
     ctx.save();
     ctx.translate(this.c.width / 2, this.c.height / 2);
@@ -51,25 +96,27 @@ export class Renderer {
     const x1 = Math.min(W - 1, Math.ceil((this.cam.x + halfW) / TILE) + 1);
     const y0 = Math.max(0, Math.floor((this.cam.y - halfH) / TILE) - 1);
     const y1 = Math.min(H - 1, Math.ceil((this.cam.y + halfH) / TILE) + 1);
+    const view = { x0, x1, y0, y1 };
 
-    this.drawSky(ctx, x0, x1, y0, y1, game);
-    this.drawGas(ctx, x0, x1, y0, y1);
-    this.drawLiquid(ctx, x0, x1, y0, y1, game);
-    this.drawTiles(ctx, x0, x1, y0, y1);
-    this.drawConduits(ctx, x0, x1, y0, y1);
-    this.drawBuildings(ctx, x0, x1, y0, y1);
+    this.drawSpace(ctx, view, game);
+    this.drawTerrain(ctx, view);
+    this.drawLiquid(ctx, view);
+    if (this.overlay !== 'gas') this.drawGasClouds(ctx, view);
+    this.drawConduits(ctx, view);
+    this.drawBuildings(ctx, view);
+    this.drawItems(ctx, view);
+    this.drawOrders(ctx, view);
     this.drawCritters(ctx, game);
-    this.drawItems(ctx, x0, x1, y0, y1);
-    this.drawOrders(ctx, x0, x1, y0, y1);
     this.drawPawns(ctx, game);
-    this.drawLight(ctx, x0, x1, y0, y1);
-    if (this.overlay !== 'none') this.drawOverlay(ctx, x0, x1, y0, y1, game);
+    this.updateParticles(ctx, game, dt, view);
+    if (this.overlay === 'none') this.drawLighting(ctx, view, game);
+    if (this.overlay !== 'none') this.drawOverlay(ctx, view, game);
     this.drawCursor(ctx, game);
     ctx.restore();
   }
 
-  /** Фон: космос там, где нет породы вообще, и «задняя стена» биома в выкопанном. */
-  drawSky(ctx, x0, x1, y0, y1, game) {
+  // ------------------------------------------------------- космос над поверхностью
+  drawSpace(ctx, { x0, x1, y0, y1 }, game) {
     const w = this.world;
     const night = game.cycleT > 0.75;
     for (let y = y0; y <= y1; y++) {
@@ -78,190 +125,389 @@ export class Renderer {
         const px = x * TILE, py = y * TILE;
         const bm = w.back[i];
         if (!bm) {
-          const k = Math.min(1, y / 16);
-          const c = night ? [10, 16, 40] : [20, 52, 84];
-          ctx.fillStyle = `rgb(${(c[0] * (1 - k) + 6 * k) | 0},${(c[1] * (1 - k) + 14 * k) | 0},${(c[2] * (1 - k) + 22 * k) | 0})`;
+          const k = Math.min(1, y / 18);
+          const c = night ? [9, 13, 34] : [18, 46, 76];
+          ctx.fillStyle = `rgb(${(c[0] * (1 - k) + 5 * k) | 0},${(c[1] * (1 - k) + 12 * k) | 0},${(c[2] * (1 - k) + 20 * k) | 0})`;
           ctx.fillRect(px, py, TILE, TILE);
           const h = hash(x, y);
           if (h > 0.93 && y < 12) {
-            ctx.fillStyle = `rgba(255,255,255,${0.25 + h * 0.5})`;
-            ctx.fillRect(px + h * 12, py + (h * 91 % 12), 1.4, 1.4);
+            const tw = 0.55 + 0.45 * Math.sin(this.t * 1.7 + h * 40);
+            ctx.fillStyle = `rgba(255,255,255,${(0.2 + h * 0.5) * tw})`;
+            ctx.fillRect(px + h * 12, py + (h * 91 % 12), 1.5, 1.5);
+          }
+        }
+      }
+    }
+  }
+
+  /** Ландшафт кешируется кусками 16×16 тайлов: за кадр — десяток блитов вместо тысяч. */
+  drawTerrain(ctx, { x0, x1, y0, y1 }) {
+    const w = this.world;
+    for (const key of w.dirtyChunks) {
+      const ch = this.chunks.get(key);
+      if (ch) ch.dirty = true;
+    }
+    w.dirtyChunks.clear();
+
+    const used = new Set();
+    for (let cy = y0 >> 4; cy <= y1 >> 4; cy++) {
+      for (let cx = x0 >> 4; cx <= x1 >> 4; cx++) {
+        if (cx < 0 || cy < 0 || cx > (W >> 4) || cy > (H >> 4)) continue;
+        const key = (cy << 8) | cx;
+        used.add(key);
+        let ch = this.chunks.get(key);
+        if (!ch) {
+          const px = 16 * TILE * this.chunkScale;
+          ch = { canvas: makeBuffer(px, px), dirty: true };
+          ch.ctx = ch.canvas.getContext('2d');
+          this.chunks.set(key, ch);
+        }
+        if (ch.dirty) { this.paintChunk(ch, cx, cy); ch.dirty = false; }
+        ctx.drawImage(ch.canvas, cx * 16 * TILE, cy * 16 * TILE, 16 * TILE, 16 * TILE);
+      }
+    }
+    // держим в памяти только куски рядом с экраном
+    if (this.chunks.size > used.size + 12) {
+      for (const key of [...this.chunks.keys()]) if (!used.has(key)) this.chunks.delete(key);
+    }
+  }
+
+  /** Перерисовать один кусок ландшафта: задняя стена, порода, кромки, мох, трещины. */
+  paintChunk(ch, cx, cy) {
+    const w = this.world;
+    const g = ch.ctx;
+    const S = this.chunkScale;
+    g.setTransform(S, 0, 0, S, 0, 0);
+    g.clearRect(0, 0, 16 * TILE, 16 * TILE);
+    const bx = cx * 16, by = cy * 16;
+    for (let ty = 0; ty < 16; ty++) {
+      for (let tx = 0; tx < 16; tx++) {
+        const x = bx + tx, y = by + ty;
+        if (x < 0 || y < 0 || x >= W || y >= H) continue;
+        const i = y * W + x;
+        const px = tx * TILE, py = ty * TILE;
+        const m = w.mat[i];
+
+        if (!m) {
+          const bm = w.back[i];
+          if (!bm) continue;                       // космос рисуется отдельно
+          const hb = hash(x + 11, y + 5);
+          const tex = this.tex.back(bm, (hb * 8) | 0);
+          if (tex) g.drawImage(tex, px, py, TILE, TILE);
+          const jit = this.shade[i] * 0.06 + (hb - 0.5) * 0.03;
+          g.fillStyle = jit > 0 ? `rgba(210,232,255,${jit})` : `rgba(2,8,14,${-jit})`;
+          g.fillRect(px, py, TILE, TILE);
+          let ao = 0;
+          if (w.mat[i - 1]) ao += 1;
+          if (w.mat[i + 1]) ao += 1;
+          if (w.mat[i - W]) ao += 1.4;
+          if (w.mat[i + W]) ao += 0.6;
+          if (ao > 0) {
+            g.fillStyle = `rgba(3,8,14,${Math.min(0.32, ao * 0.06)})`;
+            g.fillRect(px, py, TILE, TILE);
           }
           continue;
         }
-        const def = MATS[bm];
-        const h = hash(x + 7, y - 3);
-        ctx.fillStyle = shade(h > 0.5 ? def.color2 : def.color, 0.34);
-        ctx.fillRect(px, py, TILE, TILE);
-        ctx.fillStyle = 'rgba(0,0,0,.18)';
-        ctx.fillRect(px, py, TILE, 1.5);
-      }
-    }
-  }
 
-  drawTiles(ctx, x0, x1, y0, y1) {
-    const w = this.world;
-    for (let y = y0; y <= y1; y++) {
-      for (let x = x0; x <= x1; x++) {
-        const i = y * W + x;
-        const m = w.mat[i];
-        if (!m) continue;
-        const def = MATS[m];
         const h = hash(x, y);
-        ctx.fillStyle = h > 0.5 ? def.color : def.color2;
-        ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
-        // «зерно» породы
-        ctx.fillStyle = `rgba(0,0,0,${0.06 + h * 0.10})`;
-        ctx.fillRect(x * TILE + (h * 10 | 0), y * TILE + (h * 13 % TILE | 0), 3, 2);
-        // подсветка кромки на границе с пустотой
-        if (!w.mat[(y - 1) * W + x]) {
-          ctx.fillStyle = 'rgba(255,255,255,.16)';
-          ctx.fillRect(x * TILE, y * TILE, TILE, 2.2);
+        const tex = this.tex.tile(m, (h * 8) | 0);
+        if (tex) g.drawImage(tex, px, py, TILE, TILE);
+        else { g.fillStyle = MATS[m].color; g.fillRect(px, py, TILE, TILE); }
+
+        const up = !w.mat[i - W], down = !w.mat[i + W];
+        const left = !w.mat[i - 1], right = !w.mat[i + 1];
+        const buried = !up && !down && !left && !right;
+        const tone = this.shade[i] * 0.07 + (h - 0.5) * 0.03 - (buried ? 0.06 : 0);
+        if (Math.abs(tone) > 0.01) {
+          g.fillStyle = tone > 0 ? `rgba(255,246,228,${tone})` : `rgba(4,10,16,${-tone})`;
+          g.fillRect(px, py, TILE, TILE);
         }
-        if (!w.mat[i - 1]) { ctx.fillStyle = 'rgba(255,255,255,.06)'; ctx.fillRect(x * TILE, y * TILE, 1.6, TILE); }
-        if (!w.mat[(y + 1) * W + x]) { ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.fillRect(x * TILE, y * TILE + TILE - 2, TILE, 2); }
-        // обводка по границе с пустотой — «блочный» силуэт как в ONI
-        if (!w.mat[i - 1] || !w.mat[i + 1] || !w.mat[i - W] || !w.mat[i + W]) {
-          ctx.strokeStyle = 'rgba(0,0,0,.32)';
-          ctx.lineWidth = 1;
-          ctx.strokeRect(x * TILE + .5, y * TILE + .5, TILE - 1, TILE - 1);
-        }
+
+        const E = this.tex.edges;
+        if (up) g.drawImage(E.top, px, py, TILE, TILE);
+        if (down) g.drawImage(E.bottom, px, py, TILE, TILE);
+        if (left) g.drawImage(E.left, px, py, TILE, TILE);
+        if (right) g.drawImage(E.right, px, py, TILE, TILE);
+
+        const corner = (a, b, ox, oy, sx, sy) => {
+          if (!a || !b) return;
+          g.fillStyle = 'rgba(6,12,18,.55)';
+          g.beginPath();
+          g.moveTo(ox, oy);
+          g.lineTo(ox + sx * 3.2, oy);
+          g.quadraticCurveTo(ox, oy, ox, oy + sy * 3.2);
+          g.closePath();
+          g.fill();
+        };
+        corner(up, left, px, py, 1, 1);
+        corner(up, right, px + TILE, py, -1, 1);
+        corner(down, left, px, py + TILE, 1, -1);
+        corner(down, right, px + TILE, py + TILE, -1, -1);
+
+        if (up && (m === 1 || m === 7 || m === 9)) this.moss(g, px, py, x, y, m);
+
         const dp = w.digProg[i];
-        if (dp > 0) {
-          ctx.strokeStyle = `rgba(255,180,60,${0.25 + dp / 20})`;
-          ctx.lineWidth = 1.2;
-          ctx.beginPath();
-          ctx.moveTo(x * TILE + 3, y * TILE + 3 + dp); ctx.lineTo(x * TILE + TILE - 3, y * TILE + TILE - 4);
-          ctx.stroke();
-        }
+        if (dp > 0) this.drawCracks(g, px, py, Math.min(1, dp / 10), hash(x + 3, y + 5));
       }
     }
+    g.setTransform(1, 0, 0, 1, 0, 0);
   }
 
-  drawGas(ctx, x0, x1, y0, y1) {
-    const w = this.world;
-    if (this.overlay === 'gas') return;
-    for (let y = y0; y <= y1; y++) {
-      for (let x = x0; x <= x1; x++) {
-        const i = y * W + x;
-        if (w.mat[i]) continue;
-        const o = w.o2[i], c = w.co2[i], st = w.steam[i], h = w.h2[i];
-        if (o + c + st + h < 0.02) continue;
-        const px = x * TILE, py = y * TILE;
-        if (o > 0.02) { ctx.fillStyle = `rgba(120,200,235,${Math.min(0.16, (o / GAS_CAP) * 0.13)})`; ctx.fillRect(px, py, TILE, TILE); }
-        if (c > 0.05) { ctx.fillStyle = `rgba(105,100,95,${Math.min(0.42, (c / GAS_CAP) * 0.38)})`; ctx.fillRect(px, py, TILE, TILE); }
-        if (st > 0.02) { ctx.fillStyle = `rgba(232,240,245,${Math.min(0.6, st * 0.5)})`; ctx.fillRect(px, py, TILE, TILE); }
-        if (h > 0.02) { ctx.fillStyle = `rgba(200,160,235,${Math.min(0.5, h * 0.6)})`; ctx.fillRect(px, py, TILE, TILE); }
-      }
+  /** Пучки мха на верхней кромке грунта — оживляют силуэт пещеры. */
+  moss(ctx, px, py, x, y, m) {
+    const base = m === 9 ? '#7fae52' : m === 7 ? '#6fa554' : '#5f8d43';
+    ctx.strokeStyle = base;
+    ctx.lineWidth = 0.9;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (let k = 0; k < 4; k++) {
+      const h = hash(x * 7 + k, y * 13);
+      if (h < 0.45) continue;
+      const bx = px + 2 + k * 3.6 + h * 1.5;
+      const len = 1.6 + h * 2.6;
+      ctx.moveTo(bx, py + 0.5);
+      ctx.lineTo(bx + (h - 0.5) * 1.6, py - len);
     }
+    ctx.stroke();
   }
 
-  /** Жидкость рисуем уровнем заполнения тайла — видно поверхность и глубину. */
-  drawLiquid(ctx, x0, x1, y0, y1, game) {
+  drawCracks(ctx, px, py, k, seed) {
+    ctx.save();
+    ctx.strokeStyle = `rgba(20,12,8,${0.35 + k * 0.5})`;
+    ctx.lineWidth = 0.7 + k;
+    ctx.beginPath();
+    const cx = px + TILE / 2, cy = py + TILE / 2;
+    const arms = 3 + Math.floor(k * 3);
+    for (let a = 0; a < arms; a++) {
+      const ang = (a / arms) * Math.PI * 2 + seed * 6;
+      const len = (TILE / 2) * (0.35 + k * 0.7);
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(ang) * len, cy + Math.sin(ang) * len * 0.85);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ----------------------------------------------------------------- вода
+  drawLiquid(ctx, { x0, x1, y0, y1 }) {
     const w = this.world;
-    const t = game.time;
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
         const i = y * W + x;
         const m = w.water[i];
         if (m < 1 || w.mat[i]) continue;
         const f = Math.min(1, m / LIQ_FULL);
+        const open = w.water[i - W] < 1 && !w.mat[i - W];
+        const wave = open ? Math.sin(this.t * 1.6 + x * 0.7) * 0.7 : 0;
         const hgt = Math.max(1.5, f * TILE);
-        const px = x * TILE, py = y * TILE + TILE - hgt;
+        const px = x * TILE, py = y * TILE + TILE - hgt + wave;
         const dirty = w.pwater[i] > 0.4;
         const hot = w.temp[i] > 60;
-        ctx.fillStyle = dirty ? 'rgba(112,128,70,.78)' : hot ? 'rgba(90,150,200,.75)' : 'rgba(58,124,196,.72)';
-        ctx.fillRect(px, py, TILE, hgt);
-        // блик поверхности с лёгкой волной
-        if (f < 0.98 && w.water[i - W] < 1) {
-          const wave = Math.sin(t * 2 + x * 0.8) * 0.8;
-          ctx.fillStyle = dirty ? 'rgba(180,200,120,.55)' : 'rgba(170,220,255,.55)';
-          ctx.fillRect(px, py + wave, TILE, 1.4);
+
+        ctx.fillStyle = dirty ? 'rgba(96,112,58,.88)' : hot ? 'rgba(84,144,196,.86)' : 'rgba(42,104,176,.86)';
+        ctx.fillRect(px, py, TILE, hgt + 1);
+        // толща воды темнее у дна — объём без градиента на каждый тайл
+        ctx.fillStyle = 'rgba(6,26,54,.28)';
+        ctx.fillRect(px, py + hgt * 0.55, TILE, hgt * 0.45 + 1);
+
+        if (open) {
+          // блик и пена по поверхности
+          ctx.fillStyle = dirty ? 'rgba(196,214,130,.65)' : 'rgba(190,230,255,.7)';
+          ctx.fillRect(px, py, TILE, 1.5);
+          ctx.fillStyle = 'rgba(255,255,255,.18)';
+          ctx.fillRect(px + 2 + Math.sin(this.t * 2 + x) * 2, py + 2, 4, 1);
         }
       }
     }
   }
 
-  /** Провода и трубы — тонкими линиями, соединяются с соседями. */
-  drawConduits(ctx, x0, x1, y0, y1) {
+  // ------------------------------------------------ газы мягкими облаками
+  drawGasClouds(ctx, { x0, x1, y0, y1 }) {
+    const w = this.world;
+    const g = this.gasCtx;
+    g.clearRect(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+    let any = false;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = y * W + x;
+        if (w.mat[i]) continue;
+        const o2 = w.o2[i], co2 = w.co2[i], st = w.steam[i], h2 = w.h2[i];
+        const total = o2 + co2 + st + h2;
+        if (total < 0.03) continue;
+        // цвет — смесь газов, прозрачность — давление
+        const r = (o2 * 120 + co2 * 108 + st * 232 + h2 * 198) / total;
+        const gg = (o2 * 196 + co2 * 104 + st * 238 + h2 * 158) / total;
+        const b = (o2 * 232 + co2 * 98 + st * 244 + h2 * 234) / total;
+        const heavy = (co2 + st + h2) / total;
+        const a = Math.min(0.42, (total / GAS_CAP) * (0.13 + heavy * 0.3));
+        g.fillStyle = `rgba(${r | 0},${gg | 0},${b | 0},${a})`;
+        g.fillRect(x, y, 1, 1);
+        any = true;
+      }
+    }
+    if (!any) return;
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(this.gasBuf, x0, y0, x1 - x0 + 1, y1 - y0 + 1,
+      x0 * TILE, y0 * TILE, (x1 - x0 + 1) * TILE, (y1 - y0 + 1) * TILE);
+    ctx.restore();
+  }
+
+  // --------------------------------------------------------------- освещение
+  drawLighting(ctx, { x0, x1, y0, y1 }, game) {
+    const w = this.world;
+    const l = this.lightCtx;
+    const night = game.cycleT > 0.75;
+    l.clearRect(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = y * W + x;
+        const lit = Math.min(1, w.light[i] * (night ? 0.6 : 1));
+        const k = 0.68 + lit * 0.36;                       // ниже 0.68 не темнеем — читаемость
+        const rr = Math.min(255, 255 * k * (0.88 + lit * 0.16));
+        const gg = Math.min(255, 255 * k * 0.95);
+        const bb = Math.min(255, 255 * k * (1.06 - lit * 0.08));
+        l.fillStyle = `rgb(${rr | 0},${gg | 0},${bb | 0})`;
+        l.fillRect(x, y, 1, 1);
+      }
+    }
+    ctx.save();
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(this.lightBuf, x0, y0, x1 - x0 + 1, y1 - y0 + 1,
+      x0 * TILE, y0 * TILE, (x1 - x0 + 1) * TILE, (y1 - y0 + 1) * TILE);
+
+    // тёплое сияние ламп и работающих машин
+    ctx.globalCompositeOperation = 'lighter';
+    for (const [, st] of w.bdata) {
+      if (!st.built || st.x < x0 - 6 || st.x > x1 + 6 || st.y < y0 - 6 || st.y > y1 + 6) continue;
+      const lamp = st.def.light && st.powered;
+      const hot = st.def.uses === 'coal' && st.burning;
+      if (!lamp && !hot) continue;
+      const cx = st.x * TILE + TILE / 2, cy = st.y * TILE + TILE / 2;
+      const r = lamp ? st.def.light * TILE : TILE * 2.2;
+      const grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      grd.addColorStop(0, lamp ? 'rgba(255,220,150,.42)' : 'rgba(255,140,60,.38)');
+      grd.addColorStop(1, 'rgba(255,200,120,0)');
+      ctx.fillStyle = grd;
+      ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+    }
+    ctx.restore();
+  }
+
+  // --------------------------------------------------------------- частицы
+  spawn(p) { if (this.particles.length < 900) this.particles.push(p); }
+
+  updateParticles(ctx, game, dt, view) {
+    const w = this.world;
+    // события от игры: пыль при добыче, брызги
+    if (game.fx && game.fx.length) {
+      for (const e of game.fx) {
+        for (let n = 0; n < (e.big ? 14 : 5); n++) {
+          this.spawn({
+            x: e.x * TILE + TILE / 2 + (Math.random() - 0.5) * TILE,
+            y: e.y * TILE + TILE / 2 + (Math.random() - 0.5) * TILE,
+            vx: (Math.random() - 0.5) * 18, vy: -Math.random() * 16,
+            life: 0.5 + Math.random() * 0.6, max: 1.1,
+            color: e.color || '#c8b49a', size: 0.8 + Math.random() * 1.4, grav: 42,
+          });
+        }
+      }
+      game.fx.length = 0;
+    }
+    // пузырьки в воде и пылинки в освещённом воздухе
+    if (Math.random() < dt * 22) {
+      const x = view.x0 + Math.floor(Math.random() * (view.x1 - view.x0 + 1));
+      const y = view.y0 + Math.floor(Math.random() * (view.y1 - view.y0 + 1));
+      const i = y * W + x;
+      if (!w.mat[i] && w.water[i] > 200) {
+        this.spawn({
+          x: x * TILE + Math.random() * TILE, y: y * TILE + TILE,
+          vx: (Math.random() - 0.5) * 3, vy: -8 - Math.random() * 8,
+          life: 1 + Math.random(), max: 2, color: 'rgba(200,235,255,.75)',
+          size: 0.6 + Math.random(), grav: 0,
+        });
+      } else if (!w.mat[i] && w.light[i] > 0.5) {
+        this.spawn({
+          x: x * TILE + Math.random() * TILE, y: y * TILE + Math.random() * TILE,
+          vx: (Math.random() - 0.5) * 4, vy: -1 - Math.random() * 3,
+          life: 1.5 + Math.random(), max: 2.6, color: 'rgba(255,240,200,.5)',
+          size: 0.5, grav: -1,
+        });
+      }
+    }
+
+    for (let k = this.particles.length - 1; k >= 0; k--) {
+      const p = this.particles[k];
+      p.life -= dt;
+      if (p.life <= 0) { this.particles.splice(k, 1); continue; }
+      p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.grav || 0) * dt;
+      const a = Math.max(0, Math.min(1, p.life / (p.max || 1)));
+      ctx.fillStyle = p.color.startsWith('rgba') ? p.color : p.color;
+      ctx.globalAlpha = a;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, 7); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // ------------------------------------------------------- трубы и провода
+  drawConduits(ctx, { x0, x1, y0, y1 }) {
     const w = this.world;
     const styles = { power: ['#d8b25a', 2], liquid: ['#4d9ad6', 3.2], gas: ['#b98ad8', 3.2], auto: ['#7ed957', 1.6] };
     for (const kind of ['liquid', 'gas', 'power', 'auto']) {
       const arr = w.cond[kind];
       const [color, width] = styles[kind];
-      ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineCap = 'round';
       const off = kind === 'power' ? -4 : kind === 'liquid' ? 0 : kind === 'gas' ? 4 : 6;
       for (let y = y0; y <= y1; y++) {
         for (let x = x0; x <= x1; x++) {
           const i = y * W + x;
           if (!arr[i]) continue;
           const st = w.bdata.get(i * 8 + LAYER[kind]);
-          ctx.globalAlpha = st && st.built ? 1 : 0.35;
+          const built = st && st.built;
           const cx = x * TILE + TILE / 2, cy = y * TILE + TILE / 2 + off;
-          ctx.beginPath();
-          let linked = false;
+          const links = [];
           for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-            const n = (y + dy) * W + (x + dx);
-            if (!arr[n]) continue;
-            linked = true;
-            ctx.moveTo(cx, cy);
-            ctx.lineTo(cx + dx * TILE / 2, cy + dy * TILE / 2);
+            if (arr[(y + dy) * W + (x + dx)]) links.push([dx, dy]);
           }
-          if (!linked) { ctx.moveTo(cx - 3, cy); ctx.lineTo(cx + 3, cy); }
-          ctx.stroke();
+          ctx.globalAlpha = built ? 1 : 0.35;
+          // тень трубы, затем сама труба и блик — получается объём
+          for (const pass of [0, 1, 2]) {
+            ctx.strokeStyle = pass === 0 ? 'rgba(0,0,0,.45)' : pass === 1 ? color : 'rgba(255,255,255,.35)';
+            ctx.lineWidth = pass === 0 ? width + 1.4 : pass === 1 ? width : width * 0.35;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            const yo = pass === 2 ? -width * 0.22 : 0;
+            if (!links.length) { ctx.moveTo(cx - 3, cy + yo); ctx.lineTo(cx + 3, cy + yo); }
+            for (const [dx, dy] of links) {
+              ctx.moveTo(cx, cy + yo);
+              ctx.lineTo(cx + dx * TILE / 2, cy + dy * TILE / 2 + yo);
+            }
+            ctx.stroke();
+          }
+          ctx.globalAlpha = 1;
         }
       }
-      ctx.globalAlpha = 1;
     }
   }
 
-  drawCritters(ctx, game) {
-    for (const c of game.critters || []) {
-      const px = c.px * TILE + TILE / 2, py = c.py * TILE + TILE - 3;
-      ctx.save();
-      ctx.translate(px, py);
-      ctx.fillStyle = 'rgba(0,0,0,.28)';
-      ctx.beginPath(); ctx.ellipse(0, 3, 5, 1.8, 0, 0, 7); ctx.fill();
-      ctx.fillStyle = c.def.color;
-      if (c.sp === 'hatch') {
-        roundRect(ctx, -6, -6, 12, 8, 3.4); ctx.fill();
-        ctx.fillStyle = '#2c2119';
-        ctx.fillRect(-4 * c.dir, -4, 1.4, 1.4);
-        ctx.fillRect(-6, 1.5, 2, 2); ctx.fillRect(4, 1.5, 2, 2);
-      } else if (c.sp === 'puft') {
-        ctx.beginPath(); ctx.arc(0, -4, 5, 0, 7); ctx.fill();
-        ctx.fillStyle = 'rgba(255,255,255,.5)';
-        ctx.beginPath(); ctx.arc(-1.6, -5.4, 1.4, 0, 7); ctx.fill();
-      } else {
-        ctx.beginPath();
-        ctx.ellipse(0, -3, 5.5, 3, 0, 0, 7); ctx.fill();
-        ctx.beginPath();
-        ctx.moveTo(5 * c.dir, -3); ctx.lineTo(8 * c.dir, -5.5); ctx.lineTo(8 * c.dir, -0.5); ctx.closePath(); ctx.fill();
-      }
-      if (c.hunted) {
-        ctx.strokeStyle = '#ff6b5e'; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(0, -3, 8, 0, 7); ctx.stroke();
-      }
-      ctx.restore();
-    }
-  }
-
-  drawBuildings(ctx, x0, x1, y0, y1) {
+  // ------------------------------------------------------------- постройки
+  drawBuildings(ctx, { x0, x1, y0, y1 }) {
     const w = this.world;
-    for (const [i, st] of w.bdata) {
-      const x = i % W, y = (i / W) | 0;
+    for (const [, st] of w.bdata) {
+      const x = st.x, y = st.y;
       if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+      if (st.def.conduit) continue;
       const px = x * TILE, py = y * TILE, def = st.def;
       if (!st.built) {
         ctx.strokeStyle = 'rgba(90,220,235,.85)';
         ctx.setLineDash([3, 3]); ctx.lineWidth = 1.2;
         ctx.strokeRect(px + 1.5, py + 1.5, TILE - 3, TILE - 3);
         ctx.setLineDash([]);
-        ctx.fillStyle = 'rgba(70,200,220,.16)';
+        ctx.fillStyle = 'rgba(70,200,220,.14)';
         ctx.fillRect(px + 1.5, py + 1.5, TILE - 3, TILE - 3);
         const frac = st.prog / def.work;
-        if (frac > 0) { ctx.fillStyle = 'rgba(255,180,60,.5)'; ctx.fillRect(px + 2, py + TILE - 4, (TILE - 4) * frac, 2); }
-        ctx.globalAlpha = 0.55;
+        if (frac > 0) { ctx.fillStyle = 'rgba(255,180,60,.6)'; ctx.fillRect(px + 2, py + TILE - 4, (TILE - 4) * frac, 2); }
+        ctx.globalAlpha = 0.5;
         this.icon(ctx, def, px, py, st);
         ctx.globalAlpha = 1;
         continue;
@@ -273,77 +519,144 @@ export class Renderer {
 
   icon(ctx, def, px, py, st) {
     if (def.key === 'tile') {
-      ctx.fillStyle = '#8a7f74'; ctx.fillRect(px, py, TILE, TILE);
-      ctx.fillStyle = 'rgba(255,255,255,.18)'; ctx.fillRect(px, py, TILE, 2);
-      ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.strokeRect(px + .5, py + .5, TILE - 1, TILE - 1);
+      // кирпичная кладка со смещением рядов
+      const tex = this.tex.tile(2, ((px + py) / TILE) & 3);
+      if (tex) ctx.drawImage(tex, px, py, TILE, TILE);
+      ctx.fillStyle = 'rgba(255,240,215,.18)'; ctx.fillRect(px, py, TILE, 2);
+      ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(px, py + TILE - 2, TILE, 2);
+      ctx.strokeStyle = 'rgba(0,0,0,.3)'; ctx.lineWidth = 1;
+      const row = ((py / TILE) | 0) % 2;
+      ctx.beginPath();
+      ctx.moveTo(px, py + TILE / 2); ctx.lineTo(px + TILE, py + TILE / 2);
+      ctx.moveTo(px + (row ? TILE / 2 : 0), py); ctx.lineTo(px + (row ? TILE / 2 : 0), py + TILE / 2);
+      ctx.moveTo(px + (row ? 0 : TILE / 2), py + TILE / 2); ctx.lineTo(px + (row ? 0 : TILE / 2), py + TILE);
+      ctx.stroke();
       return;
     }
     if (def.key === 'ladder') {
-      ctx.strokeStyle = '#c8a06a'; ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(0,0,0,.4)'; ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(px + 4.6, py); ctx.lineTo(px + 4.6, py + TILE);
+      ctx.moveTo(px + TILE - 3.4, py); ctx.lineTo(px + TILE - 3.4, py + TILE);
+      ctx.stroke();
+      ctx.strokeStyle = '#caa06a'; ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(px + 4, py); ctx.lineTo(px + 4, py + TILE);
       ctx.moveTo(px + TILE - 4, py); ctx.lineTo(px + TILE - 4, py + TILE);
       for (let k = 3; k < TILE; k += 5) { ctx.moveTo(px + 4, py + k); ctx.lineTo(px + TILE - 4, py + k); }
       ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,230,190,.45)'; ctx.lineWidth = 0.7;
+      ctx.beginPath();
+      ctx.moveTo(px + 3.3, py); ctx.lineTo(px + 3.3, py + TILE);
+      ctx.stroke();
       return;
     }
-    // корпус устройства
-    ctx.fillStyle = st.powered === false && def.power < 0 ? '#5a4550' : '#3c5b66';
+    if (def.key === 'door') {
+      ctx.fillStyle = '#6a7784';
+      roundRect(ctx, px + 1, py + 1, TILE - 2, TILE - 2, 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,.18)'; ctx.fillRect(px + 2, py + 2, TILE - 4, 2);
+      ctx.fillStyle = '#48535e'; ctx.fillRect(px + TILE / 2 - 1, py + 2, 2, TILE - 4);
+      return;
+    }
+
+    // корпус прибора: металл с бликом и болтами
+    const unpowered = def.power < 0 && st.powered === false;
+    const g = ctx.createLinearGradient(0, py, 0, py + TILE);
+    g.addColorStop(0, unpowered ? '#4b3f4d' : '#456a76');
+    g.addColorStop(1, unpowered ? '#2c242f' : '#243d47');
+    ctx.fillStyle = g;
     roundRect(ctx, px + 1, py + 2, TILE - 2, TILE - 3, 3);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,.2)'; ctx.lineWidth = 1; ctx.stroke();
-    ctx.font = `${TILE - 5}px serif`;
+    ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,.12)';
+    ctx.fillRect(px + 2, py + 3, TILE - 4, 1.4);
+    ctx.fillStyle = 'rgba(0,0,0,.35)';
+    for (const [bx, by] of [[3, 4], [TILE - 3, 4], [3, TILE - 3], [TILE - 3, TILE - 3]]) {
+      ctx.beginPath(); ctx.arc(px + bx, py + by, 0.7, 0, 7); ctx.fill();
+    }
+
+    ctx.font = `${TILE - 6}px serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(def.icon, px + TILE / 2, py + TILE / 2 + 1);
+
     if (def.farm && st.planted && st.plant) {
       ctx.font = `${TILE - 6}px serif`;
       ctx.fillText(PLANTS[st.plant]?.icon || '🌱', px + TILE / 2, py + TILE / 2 - 4);
-      if (st.wilt) {
-        ctx.fillStyle = '#ff6b5e';
-        ctx.beginPath(); ctx.arc(px + 3, py + 3, 1.8, 0, 7); ctx.fill();
-      }
+      if (st.wilt) { ctx.fillStyle = '#ff6b5e'; ctx.beginPath(); ctx.arc(px + 3, py + 3, 1.8, 0, 7); ctx.fill(); }
     }
     if (def.farm && st.planted) {
-      const g = Math.min(1, st.growth);
+      const gr = Math.min(1, st.growth);
       ctx.strokeStyle = '#8ada6a'; ctx.lineWidth = 1.6;
       ctx.beginPath();
       ctx.moveTo(px + TILE / 2, py + TILE - 2);
-      ctx.lineTo(px + TILE / 2, py + TILE - 2 - g * (TILE - 5));
+      ctx.lineTo(px + TILE / 2, py + TILE - 2 - gr * (TILE - 5));
       ctx.stroke();
-      if (g >= 1) { ctx.fillStyle = '#ffd35c'; ctx.beginPath(); ctx.arc(px + TILE / 2, py + 3, 2.4, 0, 7); ctx.fill(); }
+      if (gr >= 1) { ctx.fillStyle = '#ffd35c'; ctx.beginPath(); ctx.arc(px + TILE / 2, py + 3, 2.4, 0, 7); ctx.fill(); }
     }
-    if (def.power < 0 && st.powered === false) {
-      ctx.fillStyle = '#ff6b5e'; ctx.beginPath(); ctx.arc(px + TILE - 3, py + 3, 1.8, 0, 7); ctx.fill();
+    if (unpowered) {
+      ctx.fillStyle = '#ff6b5e';
+      ctx.beginPath(); ctx.arc(px + TILE - 3, py + 3, 1.8, 0, 7); ctx.fill();
+    } else if (def.power < 0 && st.powered) {
+      ctx.fillStyle = '#7ed957';
+      ctx.beginPath(); ctx.arc(px + TILE - 3, py + 3, 1.6, 0, 7); ctx.fill();
     }
   }
 
-  drawItems(ctx, x0, x1, y0, y1) {
+  // ------------------------------------------------------- ресурсы на полу
+  drawItems(ctx, { x0, x1, y0, y1 }) {
     const w = this.world;
-    ctx.font = '9px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     for (const [i, pile] of w.items) {
       const x = i % W, y = (i / W) | 0;
       if (x < x0 || x > x1 || y < y0 || y > y1) continue;
       let k = 0;
       for (const [res, amt] of Object.entries(pile)) {
         if (amt < 0.2) continue;
-        const px = x * TILE + 4 + (k % 2) * 7, py = y * TILE + TILE - 5 - ((k / 2) | 0) * 6;
-        ctx.fillStyle = 'rgba(0,0,0,.35)';
-        ctx.beginPath(); ctx.ellipse(px, py + 2, 4.5, 2, 0, 0, 7); ctx.fill();
-        ctx.fillText(RESOURCES[res]?.icon || '•', px, py - 1);
+        const px = x * TILE + 4 + (k % 2) * 7, py = y * TILE + TILE - 4 - ((k / 2) | 0) * 6;
+        this.chunk(ctx, res, px, py, 1 + Math.min(1, amt / 40));
         k++;
+        if (k > 3) break;
       }
     }
   }
 
-  drawOrders(ctx, x0, x1, y0, y1) {
+  /** Кусок породы/ресурса: тень, тело, блик. */
+  chunk(ctx, res, px, py, scale) {
+    const [c1, c2] = RES_COLOR[res] || ['#9aa0a8', '#5f666e'];
+    const r = 2.4 * scale;
+    ctx.fillStyle = 'rgba(0,0,0,.35)';
+    ctx.beginPath(); ctx.ellipse(px, py + 1.2, r * 1.15, r * 0.45, 0, 0, 7); ctx.fill();
+    const g = ctx.createLinearGradient(0, py - r, 0, py + r);
+    g.addColorStop(0, c1); g.addColorStop(1, c2);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(px - r, py);
+    ctx.lineTo(px - r * 0.5, py - r);
+    ctx.lineTo(px + r * 0.6, py - r * 0.85);
+    ctx.lineTo(px + r, py + r * 0.2);
+    ctx.lineTo(px, py + r * 0.6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.35)';
+    ctx.beginPath();
+    ctx.ellipse(px - r * 0.25, py - r * 0.45, r * 0.32, r * 0.18, -0.5, 0, 7);
+    ctx.fill();
+  }
+
+  // --------------------------------------------------------------- приказы
+  drawOrders(ctx, { x0, x1, y0, y1 }) {
     const w = this.world;
     ctx.lineWidth = 1.4;
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
         const i = y * W + x;
         if (!w.dig[i] || !w.mat[i]) continue;
-        ctx.strokeStyle = 'rgba(255,190,70,.9)';
         const p = x * TILE, q = y * TILE;
+        ctx.strokeStyle = 'rgba(0,0,0,.45)';
+        ctx.beginPath();
+        ctx.moveTo(p + 3.6, q + 3.6); ctx.lineTo(p + TILE - 2.6, q + TILE - 2.6);
+        ctx.moveTo(p + TILE - 2.6, q + 3.6); ctx.lineTo(p + 3.6, q + TILE - 2.6);
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(255,196,80,.95)';
         ctx.beginPath();
         ctx.moveTo(p + 3, q + 3); ctx.lineTo(p + TILE - 3, q + TILE - 3);
         ctx.moveTo(p + TILE - 3, q + 3); ctx.lineTo(p + 3, q + TILE - 3);
@@ -352,59 +665,118 @@ export class Renderer {
     }
   }
 
+  // ------------------------------------------------------------- живность
+  drawCritters(ctx, game) {
+    for (const c of game.critters || []) {
+      const px = c.px * TILE + TILE / 2, py = c.py * TILE + TILE - 3;
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.fillStyle = 'rgba(0,0,0,.32)';
+      ctx.beginPath(); ctx.ellipse(0, 3, 5.5, 1.9, 0, 0, 7); ctx.fill();
+      const body = ctx.createLinearGradient(0, -8, 0, 2);
+      body.addColorStop(0, shadeHex(c.def.color, 1.25));
+      body.addColorStop(1, shadeHex(c.def.color, 0.75));
+      ctx.fillStyle = body;
+      if (c.sp === 'hatch') {
+        roundRect(ctx, -6, -6, 12, 8, 3.4); ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = 0.8; ctx.stroke();
+        ctx.fillStyle = '#2c2119';
+        ctx.fillRect(-4 * c.dir, -4, 1.4, 1.4);
+        ctx.fillRect(-6, 1.5, 2, 2); ctx.fillRect(4, 1.5, 2, 2);
+        ctx.fillStyle = 'rgba(255,255,255,.25)';
+        ctx.fillRect(-4, -5.2, 7, 1.2);
+      } else if (c.sp === 'puft') {
+        const bob = Math.sin(this.t * 2 + c.id) * 1.2;
+        ctx.beginPath(); ctx.arc(0, -4 + bob, 5, 0, 7); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,.45)';
+        ctx.beginPath(); ctx.arc(-1.7, -5.6 + bob, 1.5, 0, 7); ctx.fill();
+        ctx.fillStyle = '#2b2233';
+        ctx.beginPath(); ctx.arc(1.4, -4.4 + bob, 0.9, 0, 7); ctx.fill();
+      } else {
+        const swim = Math.sin(this.t * 6 + c.id) * 0.8;
+        ctx.beginPath(); ctx.ellipse(0, -3 + swim, 5.5, 3, 0, 0, 7); ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(5 * c.dir, -3 + swim); ctx.lineTo(8 * c.dir, -5.5 + swim); ctx.lineTo(8 * c.dir, -0.5 + swim);
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#1d2b33';
+        ctx.beginPath(); ctx.arc(-2 * c.dir, -3.6 + swim, 0.8, 0, 7); ctx.fill();
+      }
+      if (c.hunted) {
+        ctx.strokeStyle = '#ff6b5e'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(0, -3, 8, 0, 7); ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+
+  // ------------------------------------------------------------ дупликанты
   drawPawns(ctx, game) {
     for (const p of game.pawns) {
       const px = p.px * TILE + TILE / 2, py = p.py * TILE + TILE;
-      const walk = p.plan.length && p.plan[0].go ? Math.sin(p.anim) : 0;
+      const moving = p.plan.length && p.plan[0].go;
+      const walk = moving ? Math.sin(p.anim) : 0;
+      const breathe = Math.sin(this.t * 2 + p.id) * 0.25;
+      const asleep = p.task === 'sleep';
       ctx.save();
       ctx.translate(px, py);
+      ctx.fillStyle = 'rgba(0,0,0,.32)';
+      ctx.beginPath(); ctx.ellipse(0, 0, 6.2, 2.2, 0, 0, 7); ctx.fill();
       ctx.scale(p.facing, 1);
-      // тень
-      ctx.fillStyle = 'rgba(0,0,0,.3)';
-      ctx.beginPath(); ctx.ellipse(0, 0, 6, 2.2, 0, 0, 7); ctx.fill();
-      // ноги
-      ctx.strokeStyle = '#2d4750'; ctx.lineWidth = 1.8; ctx.lineCap = 'round';
+
+      ctx.strokeStyle = '#243c45'; ctx.lineWidth = 1.9; ctx.lineCap = 'round';
       ctx.beginPath();
-      ctx.moveTo(-1.5, -5); ctx.lineTo(-1.5 + walk * 2, -0.5);
-      ctx.moveTo(1.5, -5); ctx.lineTo(1.5 - walk * 2, -0.5);
+      ctx.moveTo(-1.5, -5); ctx.lineTo(-1.5 + walk * 2.2, -0.4);
+      ctx.moveTo(1.5, -5); ctx.lineTo(1.5 - walk * 2.2, -0.4);
       ctx.stroke();
-      // тело
-      ctx.fillStyle = p.color;
-      roundRect(ctx, -4.5, -12, 9, 8, 3.2); ctx.fill();
-      ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.lineWidth = 0.8; ctx.stroke();
-      // руки
-      ctx.strokeStyle = p.color; ctx.lineWidth = 1.8;
+
+      const body = ctx.createLinearGradient(-4.5, -12, 4.5, -4);
+      body.addColorStop(0, shadeHSL(p.color, 1.18));
+      body.addColorStop(1, shadeHSL(p.color, 0.78));
+      ctx.fillStyle = body;
+      roundRect(ctx, -4.5, -12 + breathe, 9, 8, 3.2); ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,.3)'; ctx.lineWidth = 0.8; ctx.stroke();
+
+      ctx.strokeStyle = shadeHSL(p.color, 0.95); ctx.lineWidth = 1.9;
       ctx.beginPath();
-      ctx.moveTo(-4, -10); ctx.lineTo(-6 - walk, -6);
-      ctx.moveTo(4, -10); ctx.lineTo(6 + walk, -6);
+      ctx.moveTo(-4, -10 + breathe); ctx.lineTo(-6 - walk, -6 + breathe);
+      ctx.moveTo(4, -10 + breathe); ctx.lineTo(6 + walk, -6 + breathe);
       ctx.stroke();
-      // голова
-      ctx.fillStyle = '#cfe9ea';
-      ctx.beginPath(); ctx.arc(0, -16.5, 5.2, 0, 7); ctx.fill();
-      ctx.strokeStyle = 'rgba(0,0,0,.2)'; ctx.lineWidth = 0.8; ctx.stroke();
-      // глаза
-      const asleep = p.task === 'sleep';
+
+      const head = ctx.createRadialGradient(-1.5, -18, 0.5, 0, -16.5, 6);
+      head.addColorStop(0, '#f2fbfb');
+      head.addColorStop(1, '#bcd8da');
+      ctx.fillStyle = head;
+      ctx.beginPath(); ctx.arc(0, -16.5 + breathe, 5.2, 0, 7); ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,.22)'; ctx.lineWidth = 0.8; ctx.stroke();
+
+      const blink = (Math.sin(this.t * 1.3 + p.id * 2) > 0.985) ? 0.15 : 1;
       ctx.fillStyle = '#12262c';
-      if (asleep) {
-        ctx.fillRect(-3, -17, 2.4, 0.9); ctx.fillRect(0.6, -17, 2.4, 0.9);
+      if (asleep || blink < 1) {
+        ctx.fillRect(-3, -17 + breathe, 2.4, 0.9);
+        ctx.fillRect(0.6, -17 + breathe, 2.4, 0.9);
       } else {
-        ctx.beginPath(); ctx.arc(-1.8, -17, 1.15, 0, 7); ctx.arc(1.8, -17, 1.15, 0, 7); ctx.fill();
+        ctx.beginPath();
+        ctx.arc(-1.8, -17 + breathe, 1.15, 0, 7);
+        ctx.arc(1.8, -17 + breathe, 1.15, 0, 7);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,.75)';
+        ctx.beginPath(); ctx.arc(-2.2, -17.4 + breathe, 0.4, 0, 7); ctx.fill();
       }
-      // волосы-хохолок
-      ctx.strokeStyle = p.color; ctx.lineWidth = 1.4;
-      ctx.beginPath(); ctx.moveTo(-1, -21.2); ctx.lineTo(1.5, -23.4); ctx.stroke();
+      ctx.strokeStyle = shadeHSL(p.color, 1.1); ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.moveTo(-1, -21.2 + breathe); ctx.lineTo(1.5, -23.4 + breathe); ctx.stroke();
       ctx.restore();
 
-      // ноша
-      if (p.carry) {
-        ctx.font = '9px serif'; ctx.textAlign = 'center';
-        ctx.fillText(RESOURCES[p.carry.res]?.icon || '•', px + p.facing * 7, py - 9);
+      if (p.carry) this.chunk(ctx, p.carry.res, px + p.facing * 7, py - 9, 1.2);
+      if (p.suitO2 > 0) {
+        ctx.strokeStyle = 'rgba(150,220,255,.5)'; ctx.lineWidth = 0.8;
+        ctx.beginPath(); ctx.arc(px, py - 16.5, 6.4, 0, 7); ctx.stroke();
       }
-      // статусные иконки
+
       const icons = [];
       if (p.oxygen < 45) icons.push('😵');
       if (p.calories < 1200) icons.push('🍗');
       if (p.stress > 80) icons.push('💢');
+      if (p.sick) icons.push('🤒');
       if (asleep) icons.push('💤');
       if (icons.length) {
         ctx.font = '8px serif'; ctx.textAlign = 'center';
@@ -414,28 +786,16 @@ export class Renderer {
         ctx.strokeStyle = '#ffb43d'; ctx.lineWidth = 1.2;
         ctx.beginPath(); ctx.ellipse(px, py, 9, 3.2, 0, 0, 7); ctx.stroke();
       }
-      // имя
       ctx.font = '5.5px "Trebuchet MS"'; ctx.textAlign = 'center';
-      ctx.fillStyle = 'rgba(223,243,244,.85)';
+      ctx.fillStyle = 'rgba(8,16,20,.75)';
+      ctx.fillText(p.name.split(' ')[0], px + 0.4, py + 7.4);
+      ctx.fillStyle = 'rgba(223,243,244,.92)';
       ctx.fillText(p.name.split(' ')[0], px, py + 7);
     }
   }
 
-  drawLight(ctx, x0, x1, y0, y1) {
-    if (this.overlay !== 'none') return;
-    const w = this.world;
-    for (let y = y0; y <= y1; y++) {
-      for (let x = x0; x <= x1; x++) {
-        const i = y * W + x;
-        const l = w.light[i];
-        if (l > 0.5) continue;
-        ctx.fillStyle = `rgba(2,8,14,${(0.5 - l) * 0.5})`;
-        ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
-      }
-    }
-  }
-
-  drawOverlay(ctx, x0, x1, y0, y1, game) {
+  // --------------------------------------------------------------- режимы
+  drawOverlay(ctx, { x0, x1, y0, y1 }, game) {
     const w = this.world;
     ctx.fillStyle = 'rgba(4,10,14,.55)';
     ctx.fillRect(x0 * TILE, y0 * TILE, (x1 - x0 + 1) * TILE, (y1 - y0 + 1) * TILE);
@@ -487,9 +847,9 @@ export class Renderer {
       }
     }
     if (this.overlay === 'power') {
-      for (const [i, st] of w.bdata) {
+      for (const [, st] of w.bdata) {
         if (!st.built) continue;
-        const x = (i % W) * TILE, y = ((i / W) | 0) * TILE;
+        const x = st.x * TILE, y = st.y * TILE;
         const p = st.def.power || 0;
         if (!p && !st.def.storeJ) continue;
         ctx.fillStyle = p > 0 ? 'rgba(126,217,87,.6)' : st.powered ? 'rgba(255,180,61,.55)' : 'rgba(255,80,70,.6)';
@@ -516,13 +876,6 @@ export class Renderer {
   }
 }
 
-/** Затемнить hex-цвет: k — доля от исходной яркости. */
-function shade(hex, k) {
-  const n = parseInt(hex.slice(1), 16);
-  const r = ((n >> 16) & 255) * k, g = ((n >> 8) & 255) * k, b = (n & 255) * k;
-  return `rgb(${r | 0},${g | 0},${b | 0})`;
-}
-
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);
@@ -531,4 +884,21 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.arcTo(x, y + h, x, y, r);
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
+}
+
+/** Осветлить/затемнить hex-цвет. */
+function shadeHex(hex, k) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.min(255, ((n >> 16) & 255) * k);
+  const g = Math.min(255, ((n >> 8) & 255) * k);
+  const b = Math.min(255, (n & 255) * k);
+  return `rgb(${r | 0},${g | 0},${b | 0})`;
+}
+
+/** То же для hsl(...) — цвета дупликантов задаются в HSL. */
+function shadeHSL(hsl, k) {
+  const m = /hsl\((\d+),\s*([\d.]+)%,\s*([\d.]+)%\)/.exec(hsl);
+  if (!m) return hsl;
+  const l = Math.max(8, Math.min(92, +m[3] * k));
+  return `hsl(${m[1]},${m[2]}%,${l}%)`;
 }

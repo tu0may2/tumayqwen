@@ -25,6 +25,7 @@ export class Game {
     this.time = 0; this.cycle = 1; this.cycleT = 0;
     this.speed = 1; this.selected = null; this.hover = null; this.drag = null;
     this.alerts = []; this.decor = 0;
+    this.fx = [];        // визуальные события для рендера (пыль, брызги)
     this.power = { gen: 0, demand: 0, deficit: 0, stored: 0, cap: 0 };
     this.nets = new Networks();
     this.research = new Research(this);
@@ -234,6 +235,8 @@ export class Game {
           const i = w.idx(x, y);
           if (!w.mat[i]) continue;
           w.mat[i] = 0; w.addItem(x, y, 'copper', 12); w.temp[i] += 120;
+          w.markDirty(x, y);
+          this.fx.push({ x, y, big: true, color: '#ffb46a' });
           break;
         }
       }
