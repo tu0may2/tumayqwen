@@ -3,6 +3,7 @@ import { W, H, TILE, MATS, BUILDINGS, GAS_CAP, RESOURCES, LAYER } from './world.
 import { LIQ_FULL } from './fluid.js';
 import { PLANTS } from './plants.js';
 import { TextureSet } from './textures.js';
+import { MACHINE_ART, unplugged } from './machine-art.js';
 import { makeRNG, makeNoise2D, fbm } from './util.js';
 
 const hash = (x, y) => {
@@ -108,11 +109,13 @@ export class Renderer {
     this.drawOrders(ctx, view);
     this.drawCritters(ctx, game);
     this.drawPawns(ctx, game);
+    this.drawUnderwater(ctx, view);
     this.updateParticles(ctx, game, dt, view);
     if (this.overlay === 'none') this.drawLighting(ctx, view, game);
     if (this.overlay !== 'none') this.drawOverlay(ctx, view, game);
     this.drawCursor(ctx, game);
     ctx.restore();
+    this.drawVignette(ctx);
   }
 
   // ------------------------------------------------------- космос над поверхностью
@@ -321,6 +324,47 @@ export class Renderer {
     }
   }
 
+  /** Поверх всего — тон воды: то, что под водой, выглядит погружённым. */
+  drawUnderwater(ctx, { x0, x1, y0, y1 }) {
+    const w = this.world;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = y * W + x;
+        const m = w.water[i];
+        if (m < 60 || w.mat[i]) continue;
+        const f = Math.min(1, m / LIQ_FULL);
+        const dirty = w.pwater[i] > 0.4;
+        ctx.fillStyle = dirty
+          ? `rgba(104,120,60,${0.18 + f * 0.3})`
+          : `rgba(46,110,180,${0.16 + f * 0.28})`;
+        const hgt = Math.max(2, f * TILE);
+        ctx.fillRect(x * TILE, y * TILE + TILE - hgt, TILE, hgt);
+        // каустика у поверхности
+        if (f > 0.25 && w.water[i - W] < 60) {
+          ctx.fillStyle = 'rgba(190,235,255,.22)';
+          const ph = this.t * 1.8 + x * 0.9;
+          ctx.fillRect(x * TILE + 2 + Math.sin(ph) * 3, y * TILE + TILE - hgt + 1.5, 3.5, 1);
+          ctx.fillRect(x * TILE + 9 + Math.sin(ph + 1.7) * 2.5, y * TILE + TILE - hgt + 3, 2.5, 0.8);
+        }
+      }
+    }
+  }
+
+  /** Виньетка рисуется из заранее готового слоя — градиент на каждый кадр слишком дорог. */
+  drawVignette(ctx) {
+    const { width: cw, height: ch } = this.c;
+    if (!this.vignette || this.vignette.width !== cw || this.vignette.height !== ch) {
+      this.vignette = makeBuffer(cw, ch);
+      const v = this.vignette.getContext('2d');
+      const g = v.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.38, cw / 2, ch / 2, Math.max(cw, ch) * 0.72);
+      g.addColorStop(0, 'rgba(0,0,0,0)');
+      g.addColorStop(1, 'rgba(0,0,0,.38)');
+      v.fillStyle = g;
+      v.fillRect(0, 0, cw, ch);
+    }
+    ctx.drawImage(this.vignette, 0, 0);
+  }
+
   // ------------------------------------------------ газы мягкими облаками
   drawGasClouds(ctx, { x0, x1, y0, y1 }) {
     const w = this.world;
@@ -348,8 +392,10 @@ export class Renderer {
     if (!any) return;
     ctx.save();
     ctx.imageSmoothingEnabled = true;
+    // лёгкий дрейф: облака газа не стоят как приклеенные
+    const dx = Math.sin(this.t * 0.35) * 1.6, dy = Math.cos(this.t * 0.27) * 1.1;
     ctx.drawImage(this.gasBuf, x0, y0, x1 - x0 + 1, y1 - y0 + 1,
-      x0 * TILE, y0 * TILE, (x1 - x0 + 1) * TILE, (y1 - y0 + 1) * TILE);
+      x0 * TILE + dx, y0 * TILE + dy, (x1 - x0 + 1) * TILE, (y1 - y0 + 1) * TILE);
     ctx.restore();
   }
 
@@ -362,11 +408,14 @@ export class Renderer {
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
         const i = y * W + x;
-        const lit = Math.min(1, w.light[i] * (night ? 0.6 : 1));
-        const k = 0.68 + lit * 0.36;                       // ниже 0.68 не темнеем — читаемость
-        const rr = Math.min(255, 255 * k * (0.88 + lit * 0.16));
-        const gg = Math.min(255, 255 * k * 0.95);
-        const bb = Math.min(255, 255 * k * (1.06 - lit * 0.08));
+        const lit = Math.min(1, w.light[i]);
+        // ночью фон глуше и холоднее — лампы становятся заметны
+        const k = (night ? 0.46 : 0.68) + lit * (night ? 0.3 : 0.36);
+        const warm = night ? 0.78 : 0.88 + lit * 0.16;
+        const cool = night ? 1.2 : 1.06 - lit * 0.08;
+        const rr = Math.min(255, 255 * k * warm);
+        const gg = Math.min(255, 255 * k * (night ? 0.86 : 0.95));
+        const bb = Math.min(255, 255 * k * cool);
         l.fillStyle = `rgb(${rr | 0},${gg | 0},${bb | 0})`;
         l.fillRect(x, y, 1, 1);
       }
@@ -385,9 +434,9 @@ export class Renderer {
       const hot = st.def.uses === 'coal' && st.burning;
       if (!lamp && !hot) continue;
       const cx = st.x * TILE + TILE / 2, cy = st.y * TILE + TILE / 2;
-      const r = lamp ? st.def.light * TILE : TILE * 2.2;
+      const r = lamp ? st.def.light * TILE * 0.8 : TILE * 2;
       const grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-      grd.addColorStop(0, lamp ? 'rgba(255,220,150,.42)' : 'rgba(255,140,60,.38)');
+      grd.addColorStop(0, lamp ? 'rgba(255,214,140,.22)' : 'rgba(255,140,60,.2)');
       grd.addColorStop(1, 'rgba(255,200,120,0)');
       ctx.fillStyle = grd;
       ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
@@ -559,46 +608,70 @@ export class Renderer {
       return;
     }
 
-    // корпус прибора: металл с бликом и болтами
     const unpowered = def.power < 0 && st.powered === false;
-    const g = ctx.createLinearGradient(0, py, 0, py + TILE);
-    g.addColorStop(0, unpowered ? '#4b3f4d' : '#456a76');
-    g.addColorStop(1, unpowered ? '#2c242f' : '#243d47');
-    ctx.fillStyle = g;
-    roundRect(ctx, px + 1, py + 2, TILE - 2, TILE - 3, 3);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.lineWidth = 1; ctx.stroke();
-    ctx.fillStyle = 'rgba(255,255,255,.12)';
-    ctx.fillRect(px + 2, py + 3, TILE - 4, 1.4);
-    ctx.fillStyle = 'rgba(0,0,0,.35)';
-    for (const [bx, by] of [[3, 4], [TILE - 3, 4], [3, TILE - 3], [TILE - 3, TILE - 3]]) {
-      ctx.beginPath(); ctx.arc(px + bx, py + by, 0.7, 0, 7); ctx.fill();
-    }
-
-    ctx.font = `${TILE - 6}px serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(def.icon, px + TILE / 2, py + TILE / 2 + 1);
-
-    if (def.farm && st.planted && st.plant) {
+    const art = MACHINE_ART[def.key];
+    if (art) {
+      ctx.save();
+      ctx.translate(px, py);
+      art(ctx, st, this.t);
+      if (st.noNet) unplugged(ctx);
+      ctx.restore();
+    } else {
+      // запасной вариант для построек без собственного рисунка
+      const g = ctx.createLinearGradient(0, py, 0, py + TILE);
+      g.addColorStop(0, unpowered ? '#4b3f4d' : '#456a76');
+      g.addColorStop(1, unpowered ? '#2c242f' : '#243d47');
+      ctx.fillStyle = g;
+      roundRect(ctx, px + 1, py + 2, TILE - 2, TILE - 3, 3);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.lineWidth = 1; ctx.stroke();
       ctx.font = `${TILE - 6}px serif`;
-      ctx.fillText(PLANTS[st.plant]?.icon || '🌱', px + TILE / 2, py + TILE / 2 - 4);
-      if (st.wilt) { ctx.fillStyle = '#ff6b5e'; ctx.beginPath(); ctx.arc(px + 3, py + 3, 1.8, 0, 7); ctx.fill(); }
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(def.icon, px + TILE / 2, py + TILE / 2 + 1);
     }
-    if (def.farm && st.planted) {
-      const gr = Math.min(1, st.growth);
-      ctx.strokeStyle = '#8ada6a'; ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      ctx.moveTo(px + TILE / 2, py + TILE - 2);
-      ctx.lineTo(px + TILE / 2, py + TILE - 2 - gr * (TILE - 5));
-      ctx.stroke();
-      if (gr >= 1) { ctx.fillStyle = '#ffd35c'; ctx.beginPath(); ctx.arc(px + TILE / 2, py + 3, 2.4, 0, 7); ctx.fill(); }
-    }
+
+    if (def.farm && st.planted) this.plant(ctx, px, py, st);
     if (unpowered) {
       ctx.fillStyle = '#ff6b5e';
       ctx.beginPath(); ctx.arc(px + TILE - 3, py + 3, 1.8, 0, 7); ctx.fill();
     } else if (def.power < 0 && st.powered) {
       ctx.fillStyle = '#7ed957';
       ctx.beginPath(); ctx.arc(px + TILE - 3, py + 3, 1.6, 0, 7); ctx.fill();
+    }
+  }
+
+  /** Растение на грядке: стебель, листья, плод; вянущее — жухлое и с меткой. */
+  plant(ctx, px, py, st) {
+    const gr = Math.min(1, st.growth);
+    const h = 2 + gr * (TILE - 7);
+    const sway = Math.sin(this.t * 1.1 + px * 0.3) * (0.6 + gr);
+    const cx = px + TILE / 2, base = py + TILE - 6;
+    const green = st.wilt ? '#8a8b4a' : '#63b148';
+    ctx.strokeStyle = green; ctx.lineWidth = 1.4; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx, base);
+    ctx.quadraticCurveTo(cx + sway * 0.5, base - h * 0.6, cx + sway, base - h);
+    ctx.stroke();
+    ctx.fillStyle = green;
+    const leaves = 1 + Math.floor(gr * 3);
+    for (let i = 0; i < leaves; i++) {
+      const t = (i + 1) / (leaves + 1);
+      const lx = cx + sway * t * 0.8, ly = base - h * t;
+      const dir = i % 2 ? 1 : -1;
+      ctx.beginPath();
+      ctx.ellipse(lx + dir * 2.2, ly, 2.4, 1.1, dir * 0.5, 0, 7);
+      ctx.fill();
+    }
+    if (gr >= 1) {
+      const fruit = PLANTS[st.plant]?.yield === 'food' ? '#ffd35c' : '#e0764a';
+      ctx.fillStyle = fruit;
+      ctx.beginPath(); ctx.arc(cx + sway, base - h, 2.2, 0, 7); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,.4)';
+      ctx.beginPath(); ctx.arc(cx + sway - 0.7, base - h - 0.7, 0.7, 0, 7); ctx.fill();
+    }
+    if (st.wilt) {
+      ctx.fillStyle = '#ff6b5e';
+      ctx.beginPath(); ctx.arc(px + 3, py + 3, 1.6, 0, 7); ctx.fill();
     }
   }
 
@@ -764,6 +837,22 @@ export class Renderer {
       }
       ctx.strokeStyle = shadeHSL(p.color, 1.1); ctx.lineWidth = 1.4;
       ctx.beginPath(); ctx.moveTo(-1, -21.2 + breathe); ctx.lineTo(1.5, -23.4 + breathe); ctx.stroke();
+      // инструмент в руках: кирка на копке, молоток на стройке
+      const working = p.task === 'dig' || p.task === 'build' || p.task === 'deconstruct';
+      if (working && !asleep) {
+        const swing = Math.sin(this.t * 9) * 0.9 - 0.4;
+        ctx.save();
+        ctx.translate(5.5, -8 + breathe);
+        ctx.rotate(swing);
+        ctx.strokeStyle = '#8a6a44'; ctx.lineWidth = 1.3; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(7, -1.5); ctx.stroke();
+        ctx.strokeStyle = '#c3ccd4'; ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        if (p.task === 'dig') { ctx.moveTo(5.5, -3.5); ctx.quadraticCurveTo(8.5, -1.2, 6, 1.4); }
+        else { ctx.moveTo(6, -3.2); ctx.lineTo(9, -3.2); ctx.lineTo(9, 0); ctx.lineTo(6, 0); }
+        ctx.stroke();
+        ctx.restore();
+      }
       ctx.restore();
 
       if (p.carry) this.chunk(ctx, p.carry.res, px + p.facing * 7, py - 9, 1.2);

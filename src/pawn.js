@@ -651,7 +651,9 @@ export class Pawn {
     const dx = n.x - this.px, dy = n.y - this.py;
     const d = Math.hypot(dx, dy);
     const climbing = world.climbable(this.x, this.y) || world.climbable(n.x, n.y);
-    const v = this.speed * (climbing && Math.abs(dy) > 0.1 ? 0.65 : 1) * (this.mood < 35 ? 0.8 : 1);
+    const deep = world.water[this.idx];
+    const swim = deep > 400 ? 0.45 : deep > 120 ? 0.7 : 1;      // по пояс в воде не побегаешь
+    const v = this.speed * (climbing && Math.abs(dy) > 0.1 ? 0.65 : 1) * (this.mood < 35 ? 0.8 : 1) * swim;
     const stepLen = v * dt;
     if (d <= stepLen + 1e-4) {            // доходим ровно до узла, без «перелёта»
       this.px = n.x; this.py = n.y; this.x = n.x; this.y = n.y;

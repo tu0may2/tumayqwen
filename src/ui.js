@@ -278,6 +278,7 @@ export class UI {
           rows.push(kv('Сигнал', st.signal ? 'ДА' : 'нет'));
         }
         if (st.autoOff) rows.push(kv('Автоматика', 'выключено сигналом'));
+        if (st.noNet) rows.push(kv('Электросеть', 'нет подключения'));
         if (st.def.power) rows.push(kv('Энергия', `${st.def.power} Вт ${st.def.power < 0 ? (st.powered ? '✅' : '❌') : ''}`));
         if (st.def.storeJ) rows.push(kv('Заряд', `${(st.charge / 1000).toFixed(1)} кДж`));
         if (Object.keys(st.store || {}).length)

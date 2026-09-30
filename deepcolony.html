@@ -326,16 +326,16 @@ const W = 128, H = 84, TILE = 16;
 // ---------------------------------------------------------------- материалы
 const MATS = [
   null, // 0 — пустота (газ)
-  { id: 1, name: 'Грунт',        color: '#7c5230', color2: '#573720', hard: 1.0, yield: 'dirt',   amount: 8,  heat: 25 },
-  { id: 2, name: 'Песчаник',     color: '#ab9060', color2: '#836c44', hard: 1.6, yield: 'stone',  amount: 10, heat: 22 },
-  { id: 3, name: 'Гранит',       color: '#78879b', color2: '#566072', hard: 2.8, yield: 'stone',  amount: 14, heat: 20 },
-  { id: 4, name: 'Угольный пласт', color: '#3a3a40', color2: '#26262b', hard: 2.0, yield: 'coal', amount: 10, heat: 21 },
-  { id: 5, name: 'Медная руда',  color: '#c0752f', color2: '#8e5020', hard: 2.4, yield: 'copper', amount: 10, heat: 21 },
-  { id: 6, name: 'Лёд',          color: '#a6e2f5', color2: '#74c2dc', hard: 0.7, yield: 'ice',    amount: 8,  heat: -8 },
-  { id: 7, name: 'Водорослевый нарост', color: '#5e9c46', color2: '#3f6f32', hard: 1.1, yield: 'algae', amount: 8, heat: 23 },
-  { id: 8, name: 'Абиссалит',    color: '#4b4258', color2: '#372f42', hard: Infinity, yield: null, amount: 0, heat: 18 },
-  { id: 9, name: 'Слизь',        color: '#6f8f4a', color2: '#55703a', hard: 0.9, yield: 'slime',  amount: 8,  heat: 26, germs: 'slimelung' },
-  { id: 10, name: 'Загрязнённый грунт', color: '#5a5a33', color2: '#444427', hard: 1.0, yield: 'pdirt', amount: 8, heat: 24, germs: 'food' },
+  { id: 1, name: 'Грунт',        color: '#7c5230', color2: '#573720', hard: 1.0, yield: 'dirt',   amount: 8,  heat: 25, k: 0.6,  c: 1.0, mass: 600 },
+  { id: 2, name: 'Песчаник',     color: '#ab9060', color2: '#836c44', hard: 1.6, yield: 'stone',  amount: 10, heat: 22, k: 2.0,  c: 0.8, mass: 800 },
+  { id: 3, name: 'Гранит',       color: '#78879b', color2: '#566072', hard: 2.8, yield: 'stone',  amount: 14, heat: 20, k: 3.4,  c: 0.79, mass: 1000 },
+  { id: 4, name: 'Угольный пласт', color: '#3a3a40', color2: '#26262b', hard: 2.0, yield: 'coal', amount: 10, heat: 21, k: 0.3, c: 1.1, mass: 700 },
+  { id: 5, name: 'Медная руда',  color: '#c0752f', color2: '#8e5020', hard: 2.4, yield: 'copper', amount: 10, heat: 21, k: 4.5, c: 0.39, mass: 1100 },
+  { id: 6, name: 'Лёд',          color: '#a6e2f5', color2: '#74c2dc', hard: 0.7, yield: 'ice',    amount: 8,  heat: -8, k: 2.2, c: 2.0, mass: 400 },
+  { id: 7, name: 'Водорослевый нарост', color: '#5e9c46', color2: '#3f6f32', hard: 1.1, yield: 'algae', amount: 8, heat: 23, k: 0.4, c: 1.5, mass: 500 },
+  { id: 8, name: 'Абиссалит',    color: '#4b4258', color2: '#372f42', hard: Infinity, yield: null, amount: 0, heat: 18, k: 0.002, c: 0.8, mass: 1200 },
+  { id: 9, name: 'Слизь',        color: '#6f8f4a', color2: '#55703a', hard: 0.9, yield: 'slime',  amount: 8,  heat: 26, germs: 'slimelung', k: 0.5, c: 1.8, mass: 500 },
+  { id: 10, name: 'Загрязнённый грунт', color: '#5a5a33', color2: '#444427', hard: 1.0, yield: 'pdirt', amount: 8, heat: 24, germs: 'food', k: 0.6, c: 1.1, mass: 600 },
 ];
 
 const RESOURCES = {
@@ -648,12 +648,16 @@ const HEAT_K = 0.055;
 
 // удельная теплоёмкость, кДж/(кг·°C)
 const C_GAS = 1.0, C_WATER = 4.18, C_SOLID = 0.8;
+// теплопроводность, Вт/(м·К): у газа она мала, у воды заметно выше, вакуум почти не проводит
+const K_GAS = 0.026, K_WATER = 0.6, K_VACUUM = 0.0008;
+const HEAT_SCALE = 240;        // перевод «физических» единиц в игровой темп
 // скрытая теплота, кДж/кг
 const L_FUSION = 334, L_VAPOR = 2260;
 const ICE_MASS = 400, C_ICE = 2.0;
 
 function stepFluids(world, dt) {
   stepLiquid(world, dt);
+  stepLiquidLayers(world, dt);
   stepGerms(world, dt);
   stepGas(world, dt);
   displaceGas(world);
@@ -671,6 +675,20 @@ function advect(temp, a, b, m, mb, c) {
 }
 
 // --------------------------------------------------------------- жидкости
+/** Перелить f кг воды из a в b вместе с теплом, грязью и микробами. */
+function moveWater(world, a, b, f) {
+  const { water, temp, pwater, germs } = world;
+  if (f <= 0) return;
+  const wb = water[b];
+  advect(temp, a, b, f, wb, C_WATER);
+  pwater[b] = (pwater[b] * wb + pwater[a] * f) / (wb + f);
+  germs[b] += germs[a] * (f / Math.max(water[a], f));
+  germs[a] -= germs[a] * (f / Math.max(water[a], f));
+  water[a] -= f;
+  water[b] += f;
+  if (water[a] < 0.01) { water[a] = 0; pwater[a] = 0; }
+}
+
 function stepLiquid(world, dt) {
   const { water, temp } = world;
   const blocked = i => blockedAt(world, i);
@@ -694,10 +712,7 @@ function stepLiquid(world, dt) {
       if (!blocked(d)) {
         let f = stable(remaining + water[d]) - water[d];
         f = Math.max(0, Math.min(f, flowLimit, remaining));
-        if (f > 0.01) {
-          advect(temp, i, d, f, water[d], C_WATER);
-          water[i] -= f; water[d] += f; remaining -= f;
-        }
+        if (f > 0.01) { moveWater(world, i, d, f); remaining -= f; }
       }
       if (remaining < 0.05) continue;
 
@@ -706,10 +721,7 @@ function stepLiquid(world, dt) {
         if (blocked(s)) continue;
         let f = (remaining - water[s]) / 3;
         f = Math.max(0, Math.min(f, flowLimit, remaining));
-        if (f > 0.01) {
-          advect(temp, i, s, f, water[s], C_WATER);
-          water[i] -= f; water[s] += f; remaining -= f;
-        }
+        if (f > 0.01) { moveWater(world, i, s, f); remaining -= f; }
       }
       if (remaining < 0.05) continue;
 
@@ -718,11 +730,31 @@ function stepLiquid(world, dt) {
       if (!blocked(u)) {
         let f = remaining - stable(remaining + water[u]);
         f = Math.max(0, Math.min(f, flowLimit, remaining));
-        if (f > 0.01) {
-          advect(temp, i, u, f, water[u], C_WATER);
-          water[i] -= f; water[u] += f;
-        }
+        if (f > 0.01) moveWater(world, i, u, f);
       }
+    }
+  }
+}
+
+/** Загрязнённая вода плотнее чистой: грязь опускается, чистая всплывает.
+ *  Меняем местами именно массу примеси, а не усредняем — иначе слои не разделятся. */
+function stepLiquidLayers(world, dt) {
+  const { water, pwater, germs } = world;
+  const rate = Math.min(0.6, dt * 12);
+  for (let y = H - 3; y >= 1; y--) {
+    for (let x = 1; x < W - 1; x++) {
+      const a = y * W + x, b = a + W;           // a сверху, b снизу
+      const wa = water[a], wb = water[b];
+      if (wa < 20 || wb < 20) continue;
+      if (pwater[a] <= pwater[b] + 0.005) continue;
+      const dirtA = pwater[a] * wa;             // масса примеси сверху
+      const room = (1 - pwater[b]) * wb;        // сколько ещё примет нижний слой
+      const move = Math.min(dirtA, room) * rate;
+      if (move < 1e-4) continue;
+      pwater[a] = Math.max(0, (dirtA - move) / wa);
+      pwater[b] = Math.min(1, (pwater[b] * wb + move) / wb);
+      const gm = germs[a] * (move / Math.max(dirtA, move));
+      germs[a] -= gm; germs[b] += gm;
     }
   }
 }
@@ -730,6 +762,16 @@ function stepLiquid(world, dt) {
 // ------------------------------------------------------------------ газы
 function totalGas(world, i) {
   return world.o2[i] + world.co2[i] + world.steam[i] + world.h2[i];
+}
+
+/** Количество вещества в тайле (условные кмоль) — из него считается давление. */
+function moles(world, i) {
+  return world.o2[i] / 32 + world.co2[i] / 44 + world.steam[i] / 18 + world.h2[i] / 2;
+}
+
+/** Давление идеального газа: P ~ n·T/V. Нагрев сам гонит газ наружу — это конвекция. */
+function pressure(world, i, room) {
+  return moles(world, i) * (world.temp[i] + 273) / Math.max(0.05, room);
 }
 
 /** Доля объёма тайла, занятая жидкостью: чем больше воды, тем меньше места газу. */
@@ -753,16 +795,16 @@ function stepGas(world, dt) {
     for (const g of arr) { const d = g[a] * frac; g[a] -= d; g[b] += d; }
   };
 
-  // 1. выравнивание давления (с поправкой на занятый водой объём)
+  // 1. выравнивание давления: горячий газ расширяется и уходит к соседям
   const pass = (ia, ib) => {
     if (blocked(ia) || blocked(ib)) return;
     const ra = gasRoom(world, ia), rb = gasRoom(world, ib);
     if (ra < 0.02 || rb < 0.02) return;
-    const pa = totalGas(world, ia) / ra, pb = totalGas(world, ib) / rb;
+    const pa = pressure(world, ia, ra), pb = pressure(world, ib, rb);
     const diff = (pa - pb) * k * 0.5;
-    if (Math.abs(diff) < 1e-5) return;
-    if (diff > 0) move(ia, ib, Math.min(0.5, diff / Math.max(pa, 1e-6)));
-    else move(ib, ia, Math.min(0.5, -diff / Math.max(pb, 1e-6)));
+    if (Math.abs(diff) < 1e-6) return;
+    if (diff > 0) move(ia, ib, Math.min(0.45, diff / Math.max(pa, 1e-6)));
+    else move(ib, ia, Math.min(0.45, -diff / Math.max(pb, 1e-6)));
   };
   for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 2; x++) { const i = y * W + x; pass(i, i + 1); }
   for (let y = 1; y < H - 2; y++) for (let x = 1; x < W - 1; x++) { const i = y * W + x; pass(i, i + W); }
@@ -775,16 +817,17 @@ function stepGas(world, dt) {
       if (gasRoom(world, a) < 0.02 || gasRoom(world, b) < 0.02) continue;
       const ta = totalGas(world, a), tb = totalGas(world, b);
       if (ta < 1e-4 && tb < 1e-4) continue;
+      // плотность ρ ~ M/T: тяжёлый газ тонет, но нагретый — всплывает даже будучи «тяжёлым»
+      const Ta = world.temp[a] + 273, Tb = world.temp[b] + 273;
+      const rhoA = meanM(world, a, ta) / Ta, rhoB = meanM(world, b, tb) / Tb;
       for (let gi = 0; gi < arr.length; gi++) {
-        const M = GASES[gi].M;
-        // средняя молярная масса соседа — куда стремится эта фракция
-        const Ma = meanM(world, a, ta), Mb = meanM(world, b, tb);
         const g = arr[gi];
-        if (M > Mb + 0.5 && g[a] > 1e-5) {      // тяжелее нижнего — тонет
+        const rhoUp = GASES[gi].M / Ta, rhoDown = GASES[gi].M / Tb;
+        if (rhoUp > rhoB * 1.02 && g[a] > 1e-5) {         // фракция тяжелее нижнего слоя — тонет
           const d = g[a] * ks * 0.5;
           advect(world.temp, a, b, d, tb, C_GAS);
           g[a] -= d; g[b] += d;
-        } else if (M < Ma - 0.5 && g[b] > 1e-5) { // легче верхнего — всплывает
+        } else if (rhoDown < rhoA * 0.98 && g[b] > 1e-5) { // легче верхнего — всплывает
           const d = g[b] * ks * 0.5;
           advect(world.temp, b, a, d, ta, C_GAS);
           g[b] -= d; g[a] += d;
@@ -871,10 +914,12 @@ function stepPhases(world, dt) {
       } else if (world.phase[i] > 0 && temp[i] > 0.5) {
         world.phase[i] = Math.max(0, world.phase[i] - 5 * dt);
       }
-      // вода → пар (кипение и медленное испарение в сухой воздух)
+      // вода → пар: температура кипения растёт с давлением над поверхностью
       if (water[i] > 0.5) {
-        if (temp[i] > 100) {
-          const heat = (temp[i] - 100) * water[i] * C_WATER;
+        const atm = totalGas(world, i) / 1.8;                  // ~1 при обычном давлении
+        const boil = 100 + Math.max(-20, Math.min(60, (atm - 1) * 28));
+        if (temp[i] > boil) {
+          const heat = (temp[i] - boil) * water[i] * C_WATER;
           const ev = Math.min(water[i], heat / L_VAPOR) * rate;
           water[i] -= ev; steam[i] += ev;
           temp[i] -= ev * L_VAPOR / (water[i] * C_WATER + ev * C_GAS + 1);
@@ -883,9 +928,10 @@ function stepPhases(world, dt) {
           water[i] -= ev; steam[i] += ev; temp[i] -= 0.02 * rate;
         }
       }
-      // пар → вода
-      if (steam[i] > 1e-4 && temp[i] < 97) {
-        const cond = steam[i] * Math.min(0.5, (97 - temp[i]) * 0.02 * rate);
+      // пар → вода (точка росы тоже зависит от давления)
+      const dew = 97 + Math.max(-20, Math.min(60, (totalGas(world, i) / 1.8 - 1) * 28));
+      if (steam[i] > 1e-4 && temp[i] < dew) {
+        const cond = steam[i] * Math.min(0.5, (dew - temp[i]) * 0.02 * rate);
         steam[i] -= cond; water[i] += cond;
         temp[i] += cond * L_VAPOR / (water[i] * C_WATER + 1) * 0.02;
       }
@@ -923,31 +969,57 @@ function stepGerms(world, dt) {
 }
 
 // ------------------------------------------------------------------ тепло
+/** Теплоёмкость тайла, кДж/К. */
+function heatCapacity(world, i) {
+  const m = world.mat[i];
+  if (m) { const d = MATS[m]; return d.mass * d.c; }
+  return world.water[i] * C_WATER + totalGas(world, i) * C_GAS + 0.05;
+}
+
+/** Теплопроводность тайла, Вт/(м·К): у породы своя, у смеси воды и газа — по долям. */
+function conductivity(world, i) {
+  const m = world.mat[i];
+  if (m) return MATS[m].k;
+  const wmass = world.water[i], gmass = totalGas(world, i);
+  const tot = wmass + gmass;
+  if (tot < 1e-4) return K_VACUUM;                   // вакуум почти не проводит тепло
+  return (wmass * K_WATER + gmass * K_GAS) / tot;
+}
+
 function stepHeat(world, dt) {
-  const { temp, mat, water } = world;
-  const k = Math.min(0.25, HEAT_K * dt * 60);
-  const cap = i => mat[i] ? C_SOLID * 20 : (water[i] * C_WATER * 0.02 + totalGas(world, i) * C_GAS + 0.4);
+  const { temp } = world;
   const pair = (a, b) => {
-    const ca = cap(a), cb = cap(b);
-    const d = (temp[a] - temp[b]) * k * (ca * cb) / ((ca + cb) * Math.max(ca, cb)) * 2;
-    temp[a] -= d * cb / (ca + cb) * 2 * 0.5;
-    temp[b] += d * ca / (ca + cb) * 2 * 0.5;
+    const ka = conductivity(world, a), kb = conductivity(world, b);
+    const keff = 2 * ka * kb / (ka + kb + 1e-9);      // последовательное соединение
+    if (keff < 1e-6) return;
+    const dT = temp[a] - temp[b];
+    if (Math.abs(dT) < 1e-4) return;
+    const Ca = heatCapacity(world, a), Cb = heatCapacity(world, b);
+    let q = keff * dT * dt * HEAT_SCALE;              // кДж за шаг
+    const qMax = 0.45 * dT / (1 / Ca + 1 / Cb);       // не перескакиваем равновесие
+    if (Math.abs(q) > Math.abs(qMax)) q = qMax;
+    temp[a] -= q / Ca;
+    temp[b] += q / Cb;
   };
   for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 2; x++) { const i = y * W + x; pair(i, i + 1); }
   for (let y = 1; y < H - 2; y++) for (let x = 1; x < W - 1; x++) { const i = y * W + x; pair(i, i + W); }
 }
 
-/** Освещение: солнце сверху + лампы. */
-function stepLight(world) {
+/** Освещение: солнечные лучи под углом (утро → вечер) плюс лампы. */
+function stepLight(world, sunDx = 0, sunStrength = 1) {
   const { light, mat, bdata } = world;
   light.fill(0);
   for (let x = 1; x < W - 1; x++) {
-    let l = 1;
+    let l = sunStrength;
+    let xf = x;
     for (let y = 1; y < H - 1; y++) {
-      const i = y * W + x;
+      const cx = Math.round(xf);
+      if (cx < 1 || cx >= W - 1) break;
+      const i = y * W + cx;
       light[i] = Math.max(light[i], l);
       if (mat[i]) l = 0; else l *= world.water[i] > 100 ? 0.94 : 0.985;
       if (l < 0.02) break;
+      xf += sunDx;
     }
   }
   for (const [i, st] of bdata) {
@@ -1484,8 +1556,12 @@ const GAS_KEYS = ['o2', 'co2', 'steam', 'h2'];
 function updatePower(world, nets, dt, totals) {
   totals.gen = 0; totals.demand = 0; totals.stored = 0; totals.cap = 0; totals.deficit = 0;
 
-  // машины без сети остаются обесточенными
-  for (const [, st] of world.bdata) if (st.built && st.def.power < 0) st.powered = false;
+  // машины без сети остаются обесточенными — и это надо показать игроку
+  for (const [, st] of world.bdata) {
+    if (!st.built || !(st.def.power < 0)) continue;
+    st.powered = false;
+    st.noNet = (st.net?.power ?? -1) < 0;
+  }
   if (world.netDirty) return;
 
   for (const net of nets.nets.power) {
@@ -2396,7 +2472,9 @@ class Pawn {
     const dx = n.x - this.px, dy = n.y - this.py;
     const d = Math.hypot(dx, dy);
     const climbing = world.climbable(this.x, this.y) || world.climbable(n.x, n.y);
-    const v = this.speed * (climbing && Math.abs(dy) > 0.1 ? 0.65 : 1) * (this.mood < 35 ? 0.8 : 1);
+    const deep = world.water[this.idx];
+    const swim = deep > 400 ? 0.45 : deep > 120 ? 0.7 : 1;      // по пояс в воде не побегаешь
+    const v = this.speed * (climbing && Math.abs(dy) > 0.1 ? 0.65 : 1) * (this.mood < 35 ? 0.8 : 1) * swim;
     const stepLen = v * dt;
     if (d <= stepLen + 1e-4) {            // доходим ровно до узла, без «перелёта»
       this.px = n.x; this.py = n.y; this.x = n.x; this.y = n.y;
@@ -2852,7 +2930,13 @@ class Game {
 
     stepFluids(this.world, dt);
     this.updateVents(dt);
-    if (Math.floor(this.time * 2) % 4 === 0) stepLight(this.world);
+    if (Math.floor(this.time * 2) % 4 === 0) {
+      // солнце ходит по небу: утром светит наискось с одной стороны, вечером — с другой
+      const day = Math.min(1, this.cycleT / 0.75);
+      const sunDx = Math.cos(day * Math.PI) * 0.85;
+      const strength = this.cycleT > 0.75 ? 0.12 : 0.45 + Math.sin(day * Math.PI) * 0.55;
+      stepLight(this.world, sunDx, strength);
+    }
 
     this.updateBuildings(dt);
 
@@ -2956,6 +3040,9 @@ class Game {
     const gasping = this.pawns.filter(p => p.oxygen < 45).length;
     if (gasping) this.alert(`Задыхаются: ${gasping}. Нужен кислород!`);
     if (this.power.deficit > 0) this.alert(`Не хватает ${Math.round(this.power.deficit)} Вт.`);
+    let unplugged = 0;
+    for (const [, st] of this.world.bdata) if (st.built && st.noNet) unplugged++;
+    if (unplugged) this.alert(`Без провода: ${unplugged} машин${unplugged > 1 ? '' : 'а'}. Протяните электросеть.`);
     if (this.stock('food') + this.stock('meal') < 1200 * this.pawns.length)
       this.alert('Еда на исходе — стройте грядки и кухню.');
     const sick = this.pawns.filter(p => p.sick).length;
@@ -3242,8 +3329,439 @@ class TextureSet {
   }
 }
 
+// ===== machine-art.js ==============================================
+// Рисунки машин: векторные спрайты вместо эмодзи, с анимацией работающих узлов.
+// Каждая функция рисует в локальных координатах тайла 0..TILE.
+
+const T = TILE;
+
+function rr(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+/** Корпус прибора: металл, блик, болты. */
+function housing(ctx, st, tint) {
+  const on = !(st.def.power < 0 && st.powered === false);
+  const g = ctx.createLinearGradient(0, 0, 0, T);
+  g.addColorStop(0, on ? (tint || '#4a707d') : '#4b3f4d');
+  g.addColorStop(1, on ? '#223a44' : '#2a222d');
+  ctx.fillStyle = g;
+  rr(ctx, 1, 2, T - 2, T - 3, 3); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,.13)';
+  ctx.fillRect(2.5, 3.2, T - 5, 1.2);
+  ctx.fillStyle = 'rgba(0,0,0,.35)';
+  for (const [bx, by] of [[3, 4.5], [T - 3, 4.5], [3, T - 3], [T - 3, T - 3]]) {
+    ctx.beginPath(); ctx.arc(bx, by, 0.7, 0, 7); ctx.fill();
+  }
+  return on;
+}
+
+/** Отметка «нет провода» — машина даже не подключена к сети. */
+function unplugged(ctx) {
+  ctx.strokeStyle = '#ff6b5e';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.arc(T - 3.5, T - 3.5, 2.4, 0, 7);
+  ctx.moveTo(T - 5.2, T - 5.2); ctx.lineTo(T - 1.8, T - 1.8);
+  ctx.stroke();
+}
+
+function led(ctx, on, color) {
+  ctx.fillStyle = on ? (color || '#7ed957') : '#ff6b5e';
+  ctx.beginPath(); ctx.arc(T - 3, 4, 1.5, 0, 7); ctx.fill();
+  if (on) {
+    ctx.fillStyle = 'rgba(126,217,87,.35)';
+    ctx.beginPath(); ctx.arc(T - 3, 4, 2.8, 0, 7); ctx.fill();
+  }
+}
+
+/** Вращающаяся крыльчатка. */
+function fan(ctx, cx, cy, r, angle, blades = 4, color = '#cfe6ea') {
+  ctx.save();
+  ctx.translate(cx, cy); ctx.rotate(angle);
+  ctx.fillStyle = color;
+  for (let i = 0; i < blades; i++) {
+    ctx.rotate((Math.PI * 2) / blades);
+    ctx.beginPath();
+    ctx.ellipse(r * 0.55, 0, r * 0.5, r * 0.22, 0.5, 0, 7);
+    ctx.fill();
+  }
+  ctx.fillStyle = '#233942';
+  ctx.beginPath(); ctx.arc(0, 0, r * 0.22, 0, 7); ctx.fill();
+  ctx.restore();
+}
+
+const MACHINE_ART = {
+  diffuser(ctx, st, t) {
+    const on = housing(ctx, st);
+    const spin = on && (st.store.algae || 0) > 0 ? t * 6 : 0;
+    ctx.fillStyle = '#1d3038';
+    ctx.beginPath(); ctx.arc(T / 2, T / 2 + 1, 4.6, 0, 7); ctx.fill();
+    fan(ctx, T / 2, T / 2 + 1, 4.4, spin);
+    // зелёный столбик запаса водорослей
+    const lvl = Math.min(1, (st.store.algae || 0) / 20);
+    ctx.fillStyle = '#5da84a';
+    ctx.fillRect(2.5, T - 3 - lvl * 6, 2, lvl * 6);
+    led(ctx, on);
+  },
+
+  skimmer(ctx, st, t) {
+    const on = housing(ctx, st);
+    ctx.strokeStyle = on ? '#9fd8e6' : '#5c6a70';
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    for (let a = 0; a < 10; a++) {
+      const ang = a * 0.7 + (on ? t * 2 : 0);
+      const r = 1 + a * 0.45;
+      ctx.lineTo(T / 2 + Math.cos(ang) * r, T / 2 + 1 + Math.sin(ang) * r);
+    }
+    ctx.stroke();
+    led(ctx, on);
+  },
+
+  generator(ctx, st, t) {
+    housing(ctx, st, '#5c5140');
+    const spin = (st.operating || 0) > 0 ? t * 7 : 0;
+    ctx.save();
+    ctx.translate(T / 2, T / 2 + 1); ctx.rotate(spin);
+    ctx.strokeStyle = '#d9c07a'; ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.arc(0, 0, 4.6, 0, 7); ctx.stroke();
+    ctx.beginPath();
+    for (let i = 0; i < 3; i++) { ctx.rotate(Math.PI * 2 / 3); ctx.moveTo(0, 0); ctx.lineTo(4.6, 0); }
+    ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = (st.operating || 0) > 0 ? '#7ed957' : '#48555c';
+    ctx.beginPath(); ctx.arc(T - 3, 4, 1.5, 0, 7); ctx.fill();
+  },
+
+  coalgen(ctx, st, t) {
+    housing(ctx, st, '#4a4038');
+    // топка с огнём
+    ctx.fillStyle = '#1a1512';
+    rr(ctx, 3, 6, T - 6, T - 9, 1.5); ctx.fill();
+    if (st.burning) {
+      const flick = 0.6 + Math.sin(t * 12) * 0.25;
+      const g = ctx.createRadialGradient(T / 2, T - 5, 0, T / 2, T - 5, 6);
+      g.addColorStop(0, `rgba(255,190,80,${flick})`);
+      g.addColorStop(1, 'rgba(210,60,20,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(2, 4, T - 4, T - 5);
+    }
+    ctx.fillStyle = '#2b2b30';
+    const lvl = Math.min(1, (st.store.coal || 0) / 20);
+    ctx.fillRect(2.5, T - 3 - lvl * 5, 2, lvl * 5);
+  },
+
+  battery(ctx, st) {
+    housing(ctx, st, '#3f5c52');
+    const k = Math.min(1, st.charge / st.def.storeJ);
+    ctx.fillStyle = '#16262b';
+    rr(ctx, 3.5, 4.5, T - 7, T - 8, 1.5); ctx.fill();
+    ctx.fillStyle = k > 0.6 ? '#7ed957' : k > 0.25 ? '#ffb43d' : '#ff6b5e';
+    const h = (T - 9) * k;
+    ctx.fillRect(4.2, T - 4.5 - h, T - 8.4, h);
+    ctx.fillStyle = '#cfe6ea';
+    ctx.fillRect(T / 2 - 1.6, 2.6, 3.2, 1.6);
+  },
+
+  lamp(ctx, st, t) {
+    const on = st.powered;
+    ctx.fillStyle = '#4b555c';
+    rr(ctx, T / 2 - 4, 2, 8, 3.4, 1); ctx.fill();
+    ctx.fillStyle = on ? '#ffe9a8' : '#6b7278';
+    ctx.beginPath(); ctx.arc(T / 2, 8, 3.4, 0, 7); ctx.fill();
+    if (on) {
+      const g = ctx.createRadialGradient(T / 2, 8, 1, T / 2, 8, 9);
+      g.addColorStop(0, 'rgba(255,224,150,.4)');
+      g.addColorStop(1, 'rgba(255,214,120,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, T, T);
+    }
+  },
+
+  bed(ctx, st) {
+    ctx.fillStyle = '#6b4a35';
+    rr(ctx, 1, T - 7, T - 2, 6, 1.5); ctx.fill();
+    ctx.fillStyle = '#cfd9e0';                       // подушка
+    rr(ctx, 2, T - 9, 5, 3.4, 1.4); ctx.fill();
+    ctx.fillStyle = '#4b7fa8';                       // одеяло
+    rr(ctx, 6.5, T - 9.5, T - 8, 4.4, 1.4); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.lineWidth = 0.8;
+    ctx.beginPath(); ctx.moveTo(7, T - 8); ctx.lineTo(T - 2, T - 8); ctx.stroke();
+  },
+
+  medcot(ctx, st) {
+    MACHINE_ART.bed(ctx, st);
+    ctx.fillStyle = '#e5f2f5';
+    ctx.fillRect(T - 6, T - 8.5, 3.6, 1.2);
+    ctx.fillRect(T - 4.8, T - 9.7, 1.2, 3.6);
+  },
+
+  bin(ctx, st) {
+    ctx.fillStyle = '#7a5b3a';
+    rr(ctx, 1.5, 4, T - 3, T - 5, 1.5); ctx.fill();
+    ctx.strokeStyle = '#4e3a24'; ctx.lineWidth = 0.9;
+    for (let y = 6; y < T - 1; y += 3.4) { ctx.beginPath(); ctx.moveTo(2, y); ctx.lineTo(T - 2, y); ctx.stroke(); }
+    ctx.strokeStyle = '#3a2b1a';
+    ctx.strokeRect(1.8, 4.3, T - 3.6, T - 5.6);
+    const used = Object.values(st.store || {}).reduce((a, b) => a + b, 0);
+    if (used > 0) {
+      ctx.fillStyle = '#d8c08a';
+      ctx.fillRect(2.6, 5, (T - 5.2) * Math.min(1, used / st.def.cap), 1.2);
+    }
+  },
+
+  ration(ctx, st) {
+    housing(ctx, st, '#5a6a72');
+    ctx.fillStyle = '#c9dde4';
+    rr(ctx, 3, 4.5, T - 6, T - 7, 1.5); ctx.fill();
+    ctx.fillStyle = '#7d949c';
+    ctx.fillRect(T - 5.5, 6.5, 1.2, 4);
+    if (st.chilled) {
+      ctx.strokeStyle = 'rgba(180,230,245,.7)'; ctx.lineWidth = 0.8;
+      ctx.beginPath(); ctx.moveTo(4.5, 8); ctx.lineTo(8.5, 8); ctx.moveTo(6.5, 6); ctx.lineTo(6.5, 10); ctx.stroke();
+    }
+  },
+
+  table(ctx) {
+    ctx.fillStyle = '#8a6a44';
+    ctx.fillRect(1, T - 8, T - 2, 2.4);
+    ctx.fillStyle = '#6a5031';
+    ctx.fillRect(3, T - 5.6, 1.6, 4.6);
+    ctx.fillRect(T - 4.6, T - 5.6, 1.6, 4.6);
+    ctx.fillStyle = '#dfe9ec';                       // тарелка
+    ctx.beginPath(); ctx.ellipse(T / 2, T - 9, 3, 1.2, 0, 0, 7); ctx.fill();
+  },
+
+  farm(ctx, st) {
+    ctx.fillStyle = '#6d5236';
+    rr(ctx, 1, T - 7, T - 2, 6, 1.2); ctx.fill();
+    ctx.fillStyle = '#4b3a26';
+    ctx.fillRect(2, T - 6, T - 4, 4.4);
+    ctx.fillStyle = 'rgba(255,255,255,.12)';
+    ctx.fillRect(1, T - 7, T - 2, 1);
+  },
+
+  research(ctx, st, t) {
+    const on = housing(ctx, st, '#3f5a6b');
+    ctx.fillStyle = on ? '#8fe3d8' : '#33484f';
+    rr(ctx, 3, 4.5, T - 6, 6, 1); ctx.fill();
+    if (on) {
+      ctx.fillStyle = 'rgba(20,50,55,.7)';
+      for (let i = 0; i < 3; i++) {
+        const wdt = 2 + ((Math.sin(t * 3 + i * 2) + 1) * 3);
+        ctx.fillRect(4, 5.6 + i * 1.7, wdt, 0.9);
+      }
+    }
+    ctx.fillStyle = '#2c3d45';
+    ctx.fillRect(3, T - 4.5, T - 6, 2.5);
+  },
+
+  grill(ctx, st, t) {
+    const on = housing(ctx, st, '#5b4a44');
+    ctx.fillStyle = '#2a2320';
+    rr(ctx, 2.5, 5, T - 5, T - 8, 1.2); ctx.fill();
+    ctx.fillStyle = '#b4bcc0';                       // кастрюля
+    rr(ctx, 4.5, 4, T - 9, 3.4, 1); ctx.fill();
+    if (on && (st.cookProg || 0) > 0) {
+      ctx.strokeStyle = 'rgba(230,240,245,.55)'; ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      for (let i = 0; i < 3; i++) {
+        const x = 5.5 + i * 2.2;
+        ctx.moveTo(x, 3.6);
+        ctx.quadraticCurveTo(x + Math.sin(t * 4 + i) * 1.5, 1.6, x, 0.2);
+      }
+      ctx.stroke();
+    }
+    led(ctx, on);
+  },
+
+  outhouse(ctx, st) {
+    ctx.fillStyle = '#7d6a4f';
+    rr(ctx, 1.5, 3, T - 3, T - 4, 1.5); ctx.fill();
+    ctx.fillStyle = '#e8eef0';
+    rr(ctx, 4, 7, T - 8, 5, 2); ctx.fill();
+    ctx.fillStyle = '#9fb0b6';
+    rr(ctx, 4, 5.4, T - 8, 2, 1); ctx.fill();
+    const used = Math.min(1, (st.uses || 0) / 8);
+    if (used > 0) { ctx.fillStyle = '#8a8a4a'; ctx.fillRect(2.4, T - 3.4, (T - 4.8) * used, 1.2); }
+  },
+
+  basin(ctx, st) {
+    housing(ctx, st, '#4c6a74');
+    ctx.fillStyle = '#d3e6ec';
+    rr(ctx, 3, 7, T - 6, 5, 1.6); ctx.fill();
+    ctx.strokeStyle = '#9fb7be'; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(T / 2, 7); ctx.lineTo(T / 2, 4.5); ctx.lineTo(T / 2 + 2.6, 4.5); ctx.stroke();
+  },
+
+  shower(ctx, st, t) {
+    housing(ctx, st, '#46626e');
+    ctx.fillStyle = '#c3d8de';
+    rr(ctx, T / 2 - 3.5, 3, 7, 2, 1); ctx.fill();
+    ctx.strokeStyle = 'rgba(160,215,235,.75)'; ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    for (let i = 0; i < 4; i++) {
+      const x = T / 2 - 2.4 + i * 1.6;
+      const y = 5.5 + ((t * 18 + i * 3) % 7);
+      ctx.moveTo(x, y); ctx.lineTo(x, y + 1.6);
+    }
+    ctx.stroke();
+  },
+
+  electro(ctx, st, t) {
+    const on = housing(ctx, st, '#3d6472');
+    ctx.fillStyle = '#132a33';
+    rr(ctx, 3, 4, T - 6, T - 6, 1.5); ctx.fill();
+    ctx.fillStyle = 'rgba(90,170,220,.75)';
+    ctx.fillRect(3.6, T / 2, T - 7.2, T / 2 - 2.6);
+    if (on) {
+      ctx.fillStyle = 'rgba(210,240,255,.8)';
+      for (let i = 0; i < 4; i++) {
+        const x = 4.5 + i * 2, y = T - 4 - ((t * 14 + i * 4) % 8);
+        ctx.beginPath(); ctx.arc(x, y, 0.7, 0, 7); ctx.fill();
+      }
+    }
+    led(ctx, on);
+  },
+
+  sieve(ctx, st) {
+    const on = housing(ctx, st, '#4c6553');
+    ctx.fillStyle = '#16262b';
+    rr(ctx, 3, 4, T - 6, T - 6, 1.2); ctx.fill();
+    ctx.strokeStyle = '#8fb08a'; ctx.lineWidth = 0.8;
+    for (let y = 6; y < T - 3; y += 2.2) { ctx.beginPath(); ctx.moveTo(3.6, y); ctx.lineTo(T - 3.6, y); ctx.stroke(); }
+    const lvl = Math.min(1, (st.store.stone || 0) / 20);
+    ctx.fillStyle = '#b9a884';
+    ctx.fillRect(2.4, T - 3.2 - lvl * 4, 1.8, lvl * 4);
+    led(ctx, on);
+  },
+
+  lpump(ctx, st, t) {
+    const on = housing(ctx, st, '#3f5f75');
+    ctx.fillStyle = '#16262b';
+    ctx.beginPath(); ctx.arc(T / 2, T / 2 + 1, 4.8, 0, 7); ctx.fill();
+    fan(ctx, T / 2, T / 2 + 1, 4.4, on ? t * 9 : 0, 3, '#7fc3e8');
+    led(ctx, on);
+  },
+
+  gpump(ctx, st, t) {
+    const on = housing(ctx, st, '#5b4f75');
+    ctx.fillStyle = '#1c1a2a';
+    ctx.beginPath(); ctx.arc(T / 2, T / 2 + 1, 4.8, 0, 7); ctx.fill();
+    fan(ctx, T / 2, T / 2 + 1, 4.4, on ? t * 9 : 0, 5, '#cbb0e8');
+    led(ctx, on);
+  },
+
+  gvent(ctx, st, t) {
+    ctx.fillStyle = '#4a5560';
+    rr(ctx, 1.5, 3, T - 3, T - 5, 1.5); ctx.fill();
+    ctx.strokeStyle = '#8fa2ad'; ctx.lineWidth = 1;
+    for (let y = 5; y < T - 3; y += 2.4) { ctx.beginPath(); ctx.moveTo(3, y); ctx.lineTo(T - 3, y); ctx.stroke(); }
+  },
+
+  lvent(ctx, st, t) {
+    MACHINE_ART.gvent(ctx, st, t);
+    ctx.fillStyle = 'rgba(90,170,230,.8)';
+    ctx.beginPath(); ctx.arc(T / 2, T - 3.5 - ((t * 10) % 4), 1, 0, 7); ctx.fill();
+  },
+
+  suitdock(ctx, st) {
+    const on = housing(ctx, st, '#4b5f6b');
+    ctx.fillStyle = '#d6e4e8';
+    ctx.beginPath(); ctx.arc(T / 2, 7, 3, 0, 7); ctx.fill();
+    ctx.fillStyle = '#6f8b96';
+    rr(ctx, T / 2 - 3.4, 9.5, 6.8, 4.5, 1.4); ctx.fill();
+    const o2 = Math.min(1, (st.store.o2 || 0) / 40);
+    ctx.fillStyle = '#7fd8f0';
+    ctx.fillRect(2.4, T - 3.2 - o2 * 5, 1.6, o2 * 5);
+    led(ctx, on);
+  },
+
+  arcade(ctx, st, t) {
+    const on = housing(ctx, st, '#54406b');
+    ctx.fillStyle = on ? '#8ff0d8' : '#2c3b40';
+    rr(ctx, 3, 4, T - 6, 6, 1); ctx.fill();
+    if (on) {
+      ctx.fillStyle = '#1b3038';
+      const x = 4 + ((t * 9) % (T - 9));
+      ctx.fillRect(x, 7.5, 2, 1.6);
+      ctx.fillRect(4, 5, 1.4, 1.4);
+    }
+    ctx.fillStyle = '#c05a7a';
+    ctx.beginPath(); ctx.arc(5.5, T - 4, 1.2, 0, 7); ctx.fill();
+    ctx.fillStyle = '#5ac0d0';
+    ctx.beginPath(); ctx.arc(9, T - 4, 1.2, 0, 7); ctx.fill();
+  },
+
+  sculpt(ctx) {
+    ctx.fillStyle = '#6e7783';
+    rr(ctx, 4, T - 4, T - 8, 3, 0.8); ctx.fill();
+    ctx.fillStyle = '#8b94a1';
+    ctx.beginPath();
+    ctx.moveTo(T / 2 - 2.6, T - 4);
+    ctx.lineTo(T / 2 - 1.4, 4.5);
+    ctx.lineTo(T / 2 + 1.4, 4.5);
+    ctx.lineTo(T / 2 + 2.6, T - 4);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#a7b0bc';
+    ctx.beginPath(); ctx.arc(T / 2, 3.6, 2, 0, 7); ctx.fill();
+  },
+
+  compost(ctx, st) {
+    ctx.fillStyle = '#5c5334';
+    rr(ctx, 1.5, 4, T - 3, T - 5, 1.4); ctx.fill();
+    ctx.fillStyle = '#6f6a3a';
+    ctx.fillRect(2.5, 7, T - 5, T - 9);
+    ctx.strokeStyle = '#c58a6a'; ctx.lineWidth = 0.9;
+    ctx.beginPath();
+    ctx.moveTo(4, T - 4); ctx.quadraticCurveTo(6, T - 6.5, 8, T - 4);
+    ctx.stroke();
+  },
+
+  feeder(ctx, st) {
+    ctx.fillStyle = '#7a8088';
+    ctx.beginPath();
+    ctx.ellipse(T / 2, T - 4, 5.2, 2.4, 0, Math.PI, 0, true);
+    ctx.fill();
+    const lvl = Math.min(1, (st.store.stone || 0) / 20);
+    ctx.fillStyle = '#9a8a6a';
+    ctx.beginPath(); ctx.ellipse(T / 2, T - 4.4, 4 * lvl, 1.4 * lvl, 0, 0, 7); ctx.fill();
+  },
+
+  tsensor(ctx, st) { sensorBody(ctx, st, '#ff9a5c', '🌡'); },
+  psensor(ctx, st) { sensorBody(ctx, st, '#9ad0ff', '◴'); },
+  wsensor(ctx, st) { sensorBody(ctx, st, '#6fb6e8', '≈'); },
+  switch(ctx, st) {
+    housing(ctx, st, '#4a5a4a');
+    ctx.fillStyle = '#20302c';
+    rr(ctx, 4, 5, T - 8, T - 8, 1.4); ctx.fill();
+    const on = st.on !== false;
+    ctx.fillStyle = on ? '#7ed957' : '#ff6b5e';
+    ctx.fillRect(5, on ? 6 : T - 8, T - 10, 2.6);
+  },
+};
+
+function sensorBody(ctx, st, color, glyph) {
+  housing(ctx, st, '#3e4f58');
+  ctx.fillStyle = '#132228';
+  ctx.beginPath(); ctx.arc(T / 2, T / 2 + 0.5, 4.2, 0, 7); ctx.fill();
+  ctx.strokeStyle = color; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.arc(T / 2, T / 2 + 0.5, 3, -2.4, st.signal ? 0.6 : -0.9); ctx.stroke();
+  ctx.fillStyle = st.signal ? '#7ed957' : '#48555c';
+  ctx.beginPath(); ctx.arc(T - 3, 4, 1.4, 0, 7); ctx.fill();
+}
+
 // ===== render.js ===================================================
 // Отрисовка: процедурные текстуры пород, мягкий свет, объёмная вода, частицы.
+
 
 
 
@@ -3352,11 +3870,13 @@ class Renderer {
     this.drawOrders(ctx, view);
     this.drawCritters(ctx, game);
     this.drawPawns(ctx, game);
+    this.drawUnderwater(ctx, view);
     this.updateParticles(ctx, game, dt, view);
     if (this.overlay === 'none') this.drawLighting(ctx, view, game);
     if (this.overlay !== 'none') this.drawOverlay(ctx, view, game);
     this.drawCursor(ctx, game);
     ctx.restore();
+    this.drawVignette(ctx);
   }
 
   // ------------------------------------------------------- космос над поверхностью
@@ -3565,6 +4085,47 @@ class Renderer {
     }
   }
 
+  /** Поверх всего — тон воды: то, что под водой, выглядит погружённым. */
+  drawUnderwater(ctx, { x0, x1, y0, y1 }) {
+    const w = this.world;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = y * W + x;
+        const m = w.water[i];
+        if (m < 60 || w.mat[i]) continue;
+        const f = Math.min(1, m / LIQ_FULL);
+        const dirty = w.pwater[i] > 0.4;
+        ctx.fillStyle = dirty
+          ? `rgba(104,120,60,${0.18 + f * 0.3})`
+          : `rgba(46,110,180,${0.16 + f * 0.28})`;
+        const hgt = Math.max(2, f * TILE);
+        ctx.fillRect(x * TILE, y * TILE + TILE - hgt, TILE, hgt);
+        // каустика у поверхности
+        if (f > 0.25 && w.water[i - W] < 60) {
+          ctx.fillStyle = 'rgba(190,235,255,.22)';
+          const ph = this.t * 1.8 + x * 0.9;
+          ctx.fillRect(x * TILE + 2 + Math.sin(ph) * 3, y * TILE + TILE - hgt + 1.5, 3.5, 1);
+          ctx.fillRect(x * TILE + 9 + Math.sin(ph + 1.7) * 2.5, y * TILE + TILE - hgt + 3, 2.5, 0.8);
+        }
+      }
+    }
+  }
+
+  /** Виньетка рисуется из заранее готового слоя — градиент на каждый кадр слишком дорог. */
+  drawVignette(ctx) {
+    const { width: cw, height: ch } = this.c;
+    if (!this.vignette || this.vignette.width !== cw || this.vignette.height !== ch) {
+      this.vignette = makeBuffer(cw, ch);
+      const v = this.vignette.getContext('2d');
+      const g = v.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.38, cw / 2, ch / 2, Math.max(cw, ch) * 0.72);
+      g.addColorStop(0, 'rgba(0,0,0,0)');
+      g.addColorStop(1, 'rgba(0,0,0,.38)');
+      v.fillStyle = g;
+      v.fillRect(0, 0, cw, ch);
+    }
+    ctx.drawImage(this.vignette, 0, 0);
+  }
+
   // ------------------------------------------------ газы мягкими облаками
   drawGasClouds(ctx, { x0, x1, y0, y1 }) {
     const w = this.world;
@@ -3592,8 +4153,10 @@ class Renderer {
     if (!any) return;
     ctx.save();
     ctx.imageSmoothingEnabled = true;
+    // лёгкий дрейф: облака газа не стоят как приклеенные
+    const dx = Math.sin(this.t * 0.35) * 1.6, dy = Math.cos(this.t * 0.27) * 1.1;
     ctx.drawImage(this.gasBuf, x0, y0, x1 - x0 + 1, y1 - y0 + 1,
-      x0 * TILE, y0 * TILE, (x1 - x0 + 1) * TILE, (y1 - y0 + 1) * TILE);
+      x0 * TILE + dx, y0 * TILE + dy, (x1 - x0 + 1) * TILE, (y1 - y0 + 1) * TILE);
     ctx.restore();
   }
 
@@ -3606,11 +4169,14 @@ class Renderer {
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
         const i = y * W + x;
-        const lit = Math.min(1, w.light[i] * (night ? 0.6 : 1));
-        const k = 0.68 + lit * 0.36;                       // ниже 0.68 не темнеем — читаемость
-        const rr = Math.min(255, 255 * k * (0.88 + lit * 0.16));
-        const gg = Math.min(255, 255 * k * 0.95);
-        const bb = Math.min(255, 255 * k * (1.06 - lit * 0.08));
+        const lit = Math.min(1, w.light[i]);
+        // ночью фон глуше и холоднее — лампы становятся заметны
+        const k = (night ? 0.46 : 0.68) + lit * (night ? 0.3 : 0.36);
+        const warm = night ? 0.78 : 0.88 + lit * 0.16;
+        const cool = night ? 1.2 : 1.06 - lit * 0.08;
+        const rr = Math.min(255, 255 * k * warm);
+        const gg = Math.min(255, 255 * k * (night ? 0.86 : 0.95));
+        const bb = Math.min(255, 255 * k * cool);
         l.fillStyle = `rgb(${rr | 0},${gg | 0},${bb | 0})`;
         l.fillRect(x, y, 1, 1);
       }
@@ -3629,9 +4195,9 @@ class Renderer {
       const hot = st.def.uses === 'coal' && st.burning;
       if (!lamp && !hot) continue;
       const cx = st.x * TILE + TILE / 2, cy = st.y * TILE + TILE / 2;
-      const r = lamp ? st.def.light * TILE : TILE * 2.2;
+      const r = lamp ? st.def.light * TILE * 0.8 : TILE * 2;
       const grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-      grd.addColorStop(0, lamp ? 'rgba(255,220,150,.42)' : 'rgba(255,140,60,.38)');
+      grd.addColorStop(0, lamp ? 'rgba(255,214,140,.22)' : 'rgba(255,140,60,.2)');
       grd.addColorStop(1, 'rgba(255,200,120,0)');
       ctx.fillStyle = grd;
       ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
@@ -3803,46 +4369,70 @@ class Renderer {
       return;
     }
 
-    // корпус прибора: металл с бликом и болтами
     const unpowered = def.power < 0 && st.powered === false;
-    const g = ctx.createLinearGradient(0, py, 0, py + TILE);
-    g.addColorStop(0, unpowered ? '#4b3f4d' : '#456a76');
-    g.addColorStop(1, unpowered ? '#2c242f' : '#243d47');
-    ctx.fillStyle = g;
-    roundRect(ctx, px + 1, py + 2, TILE - 2, TILE - 3, 3);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.lineWidth = 1; ctx.stroke();
-    ctx.fillStyle = 'rgba(255,255,255,.12)';
-    ctx.fillRect(px + 2, py + 3, TILE - 4, 1.4);
-    ctx.fillStyle = 'rgba(0,0,0,.35)';
-    for (const [bx, by] of [[3, 4], [TILE - 3, 4], [3, TILE - 3], [TILE - 3, TILE - 3]]) {
-      ctx.beginPath(); ctx.arc(px + bx, py + by, 0.7, 0, 7); ctx.fill();
-    }
-
-    ctx.font = `${TILE - 6}px serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(def.icon, px + TILE / 2, py + TILE / 2 + 1);
-
-    if (def.farm && st.planted && st.plant) {
+    const art = MACHINE_ART[def.key];
+    if (art) {
+      ctx.save();
+      ctx.translate(px, py);
+      art(ctx, st, this.t);
+      if (st.noNet) unplugged(ctx);
+      ctx.restore();
+    } else {
+      // запасной вариант для построек без собственного рисунка
+      const g = ctx.createLinearGradient(0, py, 0, py + TILE);
+      g.addColorStop(0, unpowered ? '#4b3f4d' : '#456a76');
+      g.addColorStop(1, unpowered ? '#2c242f' : '#243d47');
+      ctx.fillStyle = g;
+      roundRect(ctx, px + 1, py + 2, TILE - 2, TILE - 3, 3);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.lineWidth = 1; ctx.stroke();
       ctx.font = `${TILE - 6}px serif`;
-      ctx.fillText(PLANTS[st.plant]?.icon || '🌱', px + TILE / 2, py + TILE / 2 - 4);
-      if (st.wilt) { ctx.fillStyle = '#ff6b5e'; ctx.beginPath(); ctx.arc(px + 3, py + 3, 1.8, 0, 7); ctx.fill(); }
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(def.icon, px + TILE / 2, py + TILE / 2 + 1);
     }
-    if (def.farm && st.planted) {
-      const gr = Math.min(1, st.growth);
-      ctx.strokeStyle = '#8ada6a'; ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      ctx.moveTo(px + TILE / 2, py + TILE - 2);
-      ctx.lineTo(px + TILE / 2, py + TILE - 2 - gr * (TILE - 5));
-      ctx.stroke();
-      if (gr >= 1) { ctx.fillStyle = '#ffd35c'; ctx.beginPath(); ctx.arc(px + TILE / 2, py + 3, 2.4, 0, 7); ctx.fill(); }
-    }
+
+    if (def.farm && st.planted) this.plant(ctx, px, py, st);
     if (unpowered) {
       ctx.fillStyle = '#ff6b5e';
       ctx.beginPath(); ctx.arc(px + TILE - 3, py + 3, 1.8, 0, 7); ctx.fill();
     } else if (def.power < 0 && st.powered) {
       ctx.fillStyle = '#7ed957';
       ctx.beginPath(); ctx.arc(px + TILE - 3, py + 3, 1.6, 0, 7); ctx.fill();
+    }
+  }
+
+  /** Растение на грядке: стебель, листья, плод; вянущее — жухлое и с меткой. */
+  plant(ctx, px, py, st) {
+    const gr = Math.min(1, st.growth);
+    const h = 2 + gr * (TILE - 7);
+    const sway = Math.sin(this.t * 1.1 + px * 0.3) * (0.6 + gr);
+    const cx = px + TILE / 2, base = py + TILE - 6;
+    const green = st.wilt ? '#8a8b4a' : '#63b148';
+    ctx.strokeStyle = green; ctx.lineWidth = 1.4; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx, base);
+    ctx.quadraticCurveTo(cx + sway * 0.5, base - h * 0.6, cx + sway, base - h);
+    ctx.stroke();
+    ctx.fillStyle = green;
+    const leaves = 1 + Math.floor(gr * 3);
+    for (let i = 0; i < leaves; i++) {
+      const t = (i + 1) / (leaves + 1);
+      const lx = cx + sway * t * 0.8, ly = base - h * t;
+      const dir = i % 2 ? 1 : -1;
+      ctx.beginPath();
+      ctx.ellipse(lx + dir * 2.2, ly, 2.4, 1.1, dir * 0.5, 0, 7);
+      ctx.fill();
+    }
+    if (gr >= 1) {
+      const fruit = PLANTS[st.plant]?.yield === 'food' ? '#ffd35c' : '#e0764a';
+      ctx.fillStyle = fruit;
+      ctx.beginPath(); ctx.arc(cx + sway, base - h, 2.2, 0, 7); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,.4)';
+      ctx.beginPath(); ctx.arc(cx + sway - 0.7, base - h - 0.7, 0.7, 0, 7); ctx.fill();
+    }
+    if (st.wilt) {
+      ctx.fillStyle = '#ff6b5e';
+      ctx.beginPath(); ctx.arc(px + 3, py + 3, 1.6, 0, 7); ctx.fill();
     }
   }
 
@@ -4008,6 +4598,22 @@ class Renderer {
       }
       ctx.strokeStyle = shadeHSL(p.color, 1.1); ctx.lineWidth = 1.4;
       ctx.beginPath(); ctx.moveTo(-1, -21.2 + breathe); ctx.lineTo(1.5, -23.4 + breathe); ctx.stroke();
+      // инструмент в руках: кирка на копке, молоток на стройке
+      const working = p.task === 'dig' || p.task === 'build' || p.task === 'deconstruct';
+      if (working && !asleep) {
+        const swing = Math.sin(this.t * 9) * 0.9 - 0.4;
+        ctx.save();
+        ctx.translate(5.5, -8 + breathe);
+        ctx.rotate(swing);
+        ctx.strokeStyle = '#8a6a44'; ctx.lineWidth = 1.3; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(7, -1.5); ctx.stroke();
+        ctx.strokeStyle = '#c3ccd4'; ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        if (p.task === 'dig') { ctx.moveTo(5.5, -3.5); ctx.quadraticCurveTo(8.5, -1.2, 6, 1.4); }
+        else { ctx.moveTo(6, -3.2); ctx.lineTo(9, -3.2); ctx.lineTo(9, 0); ctx.lineTo(6, 0); }
+        ctx.stroke();
+        ctx.restore();
+      }
       ctx.restore();
 
       if (p.carry) this.chunk(ctx, p.carry.res, px + p.facing * 7, py - 9, 1.2);
@@ -4552,6 +5158,7 @@ class UI {
           rows.push(kv('Сигнал', st.signal ? 'ДА' : 'нет'));
         }
         if (st.autoOff) rows.push(kv('Автоматика', 'выключено сигналом'));
+        if (st.noNet) rows.push(kv('Электросеть', 'нет подключения'));
         if (st.def.power) rows.push(kv('Энергия', `${st.def.power} Вт ${st.def.power < 0 ? (st.powered ? '✅' : '❌') : ''}`));
         if (st.def.storeJ) rows.push(kv('Заряд', `${(st.charge / 1000).toFixed(1)} кДж`));
         if (Object.keys(st.store || {}).length)

@@ -9,8 +9,12 @@ const GAS_KEYS = ['o2', 'co2', 'steam', 'h2'];
 export function updatePower(world, nets, dt, totals) {
   totals.gen = 0; totals.demand = 0; totals.stored = 0; totals.cap = 0; totals.deficit = 0;
 
-  // машины без сети остаются обесточенными
-  for (const [, st] of world.bdata) if (st.built && st.def.power < 0) st.powered = false;
+  // машины без сети остаются обесточенными — и это надо показать игроку
+  for (const [, st] of world.bdata) {
+    if (!st.built || !(st.def.power < 0)) continue;
+    st.powered = false;
+    st.noNet = (st.net?.power ?? -1) < 0;
+  }
   if (world.netDirty) return;
 
   for (const net of nets.nets.power) {

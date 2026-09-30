@@ -6,16 +6,16 @@ export const W = 128, H = 84, TILE = 16;
 // ---------------------------------------------------------------- материалы
 export const MATS = [
   null, // 0 — пустота (газ)
-  { id: 1, name: 'Грунт',        color: '#7c5230', color2: '#573720', hard: 1.0, yield: 'dirt',   amount: 8,  heat: 25 },
-  { id: 2, name: 'Песчаник',     color: '#ab9060', color2: '#836c44', hard: 1.6, yield: 'stone',  amount: 10, heat: 22 },
-  { id: 3, name: 'Гранит',       color: '#78879b', color2: '#566072', hard: 2.8, yield: 'stone',  amount: 14, heat: 20 },
-  { id: 4, name: 'Угольный пласт', color: '#3a3a40', color2: '#26262b', hard: 2.0, yield: 'coal', amount: 10, heat: 21 },
-  { id: 5, name: 'Медная руда',  color: '#c0752f', color2: '#8e5020', hard: 2.4, yield: 'copper', amount: 10, heat: 21 },
-  { id: 6, name: 'Лёд',          color: '#a6e2f5', color2: '#74c2dc', hard: 0.7, yield: 'ice',    amount: 8,  heat: -8 },
-  { id: 7, name: 'Водорослевый нарост', color: '#5e9c46', color2: '#3f6f32', hard: 1.1, yield: 'algae', amount: 8, heat: 23 },
-  { id: 8, name: 'Абиссалит',    color: '#4b4258', color2: '#372f42', hard: Infinity, yield: null, amount: 0, heat: 18 },
-  { id: 9, name: 'Слизь',        color: '#6f8f4a', color2: '#55703a', hard: 0.9, yield: 'slime',  amount: 8,  heat: 26, germs: 'slimelung' },
-  { id: 10, name: 'Загрязнённый грунт', color: '#5a5a33', color2: '#444427', hard: 1.0, yield: 'pdirt', amount: 8, heat: 24, germs: 'food' },
+  { id: 1, name: 'Грунт',        color: '#7c5230', color2: '#573720', hard: 1.0, yield: 'dirt',   amount: 8,  heat: 25, k: 0.6,  c: 1.0, mass: 600 },
+  { id: 2, name: 'Песчаник',     color: '#ab9060', color2: '#836c44', hard: 1.6, yield: 'stone',  amount: 10, heat: 22, k: 2.0,  c: 0.8, mass: 800 },
+  { id: 3, name: 'Гранит',       color: '#78879b', color2: '#566072', hard: 2.8, yield: 'stone',  amount: 14, heat: 20, k: 3.4,  c: 0.79, mass: 1000 },
+  { id: 4, name: 'Угольный пласт', color: '#3a3a40', color2: '#26262b', hard: 2.0, yield: 'coal', amount: 10, heat: 21, k: 0.3, c: 1.1, mass: 700 },
+  { id: 5, name: 'Медная руда',  color: '#c0752f', color2: '#8e5020', hard: 2.4, yield: 'copper', amount: 10, heat: 21, k: 4.5, c: 0.39, mass: 1100 },
+  { id: 6, name: 'Лёд',          color: '#a6e2f5', color2: '#74c2dc', hard: 0.7, yield: 'ice',    amount: 8,  heat: -8, k: 2.2, c: 2.0, mass: 400 },
+  { id: 7, name: 'Водорослевый нарост', color: '#5e9c46', color2: '#3f6f32', hard: 1.1, yield: 'algae', amount: 8, heat: 23, k: 0.4, c: 1.5, mass: 500 },
+  { id: 8, name: 'Абиссалит',    color: '#4b4258', color2: '#372f42', hard: Infinity, yield: null, amount: 0, heat: 18, k: 0.002, c: 0.8, mass: 1200 },
+  { id: 9, name: 'Слизь',        color: '#6f8f4a', color2: '#55703a', hard: 0.9, yield: 'slime',  amount: 8,  heat: 26, germs: 'slimelung', k: 0.5, c: 1.8, mass: 500 },
+  { id: 10, name: 'Загрязнённый грунт', color: '#5a5a33', color2: '#444427', hard: 1.0, yield: 'pdirt', amount: 8, heat: 24, germs: 'food', k: 0.6, c: 1.1, mass: 600 },
 ];
 
 export const RESOURCES = {

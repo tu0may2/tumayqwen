@@ -151,7 +151,13 @@ export class Game {
 
     stepFluids(this.world, dt);
     this.updateVents(dt);
-    if (Math.floor(this.time * 2) % 4 === 0) stepLight(this.world);
+    if (Math.floor(this.time * 2) % 4 === 0) {
+      // солнце ходит по небу: утром светит наискось с одной стороны, вечером — с другой
+      const day = Math.min(1, this.cycleT / 0.75);
+      const sunDx = Math.cos(day * Math.PI) * 0.85;
+      const strength = this.cycleT > 0.75 ? 0.12 : 0.45 + Math.sin(day * Math.PI) * 0.55;
+      stepLight(this.world, sunDx, strength);
+    }
 
     this.updateBuildings(dt);
 
@@ -255,6 +261,9 @@ export class Game {
     const gasping = this.pawns.filter(p => p.oxygen < 45).length;
     if (gasping) this.alert(`Задыхаются: ${gasping}. Нужен кислород!`);
     if (this.power.deficit > 0) this.alert(`Не хватает ${Math.round(this.power.deficit)} Вт.`);
+    let unplugged = 0;
+    for (const [, st] of this.world.bdata) if (st.built && st.noNet) unplugged++;
+    if (unplugged) this.alert(`Без провода: ${unplugged} машин${unplugged > 1 ? '' : 'а'}. Протяните электросеть.`);
     if (this.stock('food') + this.stock('meal') < 1200 * this.pawns.length)
       this.alert('Еда на исходе — стройте грядки и кухню.');
     const sick = this.pawns.filter(p => p.sick).length;
