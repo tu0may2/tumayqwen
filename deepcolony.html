@@ -1,0 +1,4037 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body>
+<title>Deep Colony</title>
+<style>
+:root{
+  color-scheme:dark;   /* игра живёт в одном тёмном мире, как ONI */
+  --bg:#0d1b21;
+  --panel:#14282f;
+  --panel2:#1b3540;
+  --edge:#2b5361;
+  --text:#dff3f4;
+  --dim:#8fb3b8;
+  --accent:#ffb43d;
+  --accent2:#48c9d6;
+  --good:#7ed957;
+  --bad:#ff6b5e;
+  --shadow:0 6px 18px rgba(0,0,0,.45);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--text);
+  font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;user-select:none;-webkit-user-select:none}
+#app{position:fixed;inset:0}
+canvas#view{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:crosshair;image-rendering:auto;touch-action:none}
+
+/* ---------- top bar ---------- */
+#topbar{position:absolute;top:0;left:0;right:0;min-height:52px;display:flex;align-items:center;gap:18px;
+  padding:env(safe-area-inset-top,0px) 14px 0;background:linear-gradient(180deg,rgba(20,40,47,.97),rgba(20,40,47,.82));
+  border-bottom:2px solid var(--edge);box-shadow:var(--shadow);z-index:5}
+.brand{font-weight:bold;letter-spacing:2px;color:var(--accent);font-size:18px}
+.brand span{color:var(--accent2)}
+.res{display:flex;gap:8px;flex:1;flex-wrap:nowrap;overflow:hidden;font-size:12px}
+.res .r{display:flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--edge);
+  border-radius:16px;padding:3px 10px}
+.res .r b{color:var(--accent);font-weight:600}
+.res .r i{font-style:normal;opacity:.75}
+.clock{display:flex;align-items:center;gap:12px}
+.cycle{font-size:13px;color:var(--dim)}
+.speeds{display:flex;gap:4px}
+.spd{background:var(--panel2);color:var(--dim);border:1px solid var(--edge);border-radius:8px;
+  padding:5px 9px;cursor:pointer;font-size:12px}
+.spd.active{background:var(--accent);color:#22313a;border-color:var(--accent);font-weight:bold}
+
+/* ---------- sidebar ---------- */
+#sidebar{position:absolute;top:60px;right:8px;bottom:120px;width:270px;display:flex;flex-direction:column;gap:8px;z-index:4;overflow-y:auto}
+.panel{background:rgba(20,40,47,.94);border:2px solid var(--edge);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+.panel-title{background:var(--panel2);padding:6px 10px;font-size:12px;letter-spacing:1px;color:var(--accent2);
+  text-transform:uppercase;border-bottom:1px solid var(--edge)}
+.panel-body{padding:8px 10px;font-size:12px;max-height:34vh;overflow:auto;line-height:1.5}
+.panel-body::-webkit-scrollbar{width:7px}
+.panel-body::-webkit-scrollbar-thumb{background:var(--edge);border-radius:4px}
+.kv{display:flex;justify-content:space-between;gap:8px}
+.kv span:last-child{color:var(--accent)}
+.sep{height:1px;background:var(--edge);margin:6px 0}
+
+/* colonist cards */
+.col-card{border:1px solid var(--edge);border-radius:8px;padding:6px;margin-bottom:6px;background:var(--panel2);cursor:pointer}
+.col-card.sel{border-color:var(--accent)}
+.col-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.col-name{font-weight:bold}
+.col-task{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+.bar{height:6px;background:#0c1c22;border-radius:4px;overflow:hidden;margin:2px 0}
+.bar i{display:block;height:100%;border-radius:4px}
+.blabel{font-size:10px;color:var(--dim);display:flex;justify-content:space-between}
+
+/* ---------- toolbar ---------- */
+#toolbar{position:absolute;left:0;right:0;bottom:0;padding-bottom:calc(8px + env(safe-area-inset-bottom,0px));background:linear-gradient(0deg,rgba(20,40,47,.98),rgba(20,40,47,.86));
+  border-top:2px solid var(--edge);padding:6px 10px 8px;z-index:5;box-shadow:0 -6px 18px rgba(0,0,0,.4)}
+.tabs{display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap}
+.tab{background:var(--panel2);border:1px solid var(--edge);color:var(--dim);border-radius:8px 8px 0 0;
+  padding:4px 12px;font-size:12px;cursor:pointer}
+.tab.active{background:var(--accent);color:#22313a;font-weight:bold;border-color:var(--accent)}
+.tools{display:flex;gap:6px;flex-wrap:wrap;min-height:58px}
+.tool{width:74px;background:var(--panel2);border:1px solid var(--edge);border-radius:10px;padding:5px 4px;
+  text-align:center;cursor:pointer;transition:.12s}
+.tool:hover{border-color:var(--accent2);transform:translateY(-2px)}
+.tool.active{border-color:var(--accent);background:#2a4550;box-shadow:0 0 0 1px var(--accent) inset}
+.tool .ic{font-size:19px;line-height:1.1}
+.tool .nm{font-size:10px;color:var(--dim);margin-top:2px}
+.tool .cost{font-size:9px;color:var(--accent)}
+.hint{font-size:11px;color:var(--dim);margin-top:5px}
+
+/* ---------- overlays / alerts ---------- */
+#overlay-toggles{position:absolute;left:8px;top:60px;display:flex;flex-direction:column;gap:5px;z-index:4}
+.ov{background:rgba(20,40,47,.92);border:1px solid var(--edge);color:var(--dim);border-radius:8px;
+  padding:5px 10px;font-size:11px;cursor:pointer;text-align:left}
+.ov.active{border-color:var(--accent2);color:var(--accent2)}
+#alerts{position:absolute;left:50%;top:62px;transform:translateX(-50%);z-index:6;display:flex;
+  flex-direction:column;gap:5px;align-items:center;pointer-events:none}
+.alert{background:rgba(40,20,20,.95);border:1px solid var(--bad);color:#ffd9d4;padding:5px 14px;
+  border-radius:16px;font-size:12px;animation:pop .25s ease}
+.alert.info{background:rgba(20,45,50,.95);border-color:var(--accent2);color:#d6f6fa}
+@keyframes pop{from{opacity:0;transform:translateY(-6px)}to{opacity:1}}
+
+/* исследования и приоритеты */
+.tech{border:1px solid var(--edge);border-radius:8px;padding:5px 7px;margin-bottom:5px;background:var(--panel2);cursor:pointer}
+.tech:hover{border-color:var(--accent2)}
+.tech.active{border-color:var(--accent)}
+.tech.done{opacity:.55;cursor:default}
+.tech b{color:var(--accent2)}
+.tech .d{font-size:10px;color:var(--dim)}
+.prio{display:flex;flex-wrap:wrap;gap:3px;margin-top:4px}
+.prio span{font-size:10px;border:1px solid var(--edge);border-radius:6px;padding:1px 5px;cursor:pointer;background:#10232a}
+.prio span.off{opacity:.35;text-decoration:line-through}
+.tool.locked{opacity:.4;cursor:not-allowed}
+
+.sched{display:flex;gap:2px}
+.sched div{flex:1;height:26px;border-radius:4px;display:flex;align-items:center;justify-content:center;
+  font-size:11px;cursor:pointer;border:1px solid var(--edge)}
+.sched div.now{outline:2px solid var(--accent)}
+.hint2{font-size:10px;color:var(--dim);margin-top:4px}
+.prio span.p5{border-color:var(--accent);color:var(--accent)}
+.prio span.p1{opacity:.6}
+.rel{font-size:10px;color:var(--dim)}
+
+/* узкие экраны и планшеты: панели ужимаются, кнопки остаются нажимаемыми пальцем */
+@media (max-width:820px){
+  .brand{font-size:14px;letter-spacing:1px}
+  #sidebar{width:210px;top:56px;bottom:150px}
+  .panel-body{max-height:24vh;font-size:11px}
+  .tool{width:64px}
+  .res .r{padding:2px 7px;font-size:11px}
+  #overlay-toggles{top:56px}
+  .ov{padding:4px 7px;font-size:10px}
+}
+@media (max-width:560px){
+  #sidebar{width:min(62vw,230px);bottom:auto;max-height:46vh}
+  #overlay-toggles{flex-direction:row;flex-wrap:wrap;max-width:58vw}
+  .hint{display:none}
+  .tool{width:58px}
+  .tool .nm{font-size:9px}
+}
+</style>
+<div id="app">
+  <canvas id="view"></canvas>
+
+  <header id="topbar">
+    <div class="brand">DEEP<span>COLONY</span></div>
+    <div class="res" id="resbar"></div>
+    <div class="clock">
+      <div class="cycle" id="cycle">Цикл 1</div>
+      <div class="speeds">
+        <button id="btn-save" class="spd" title="Сохранить">💾</button>
+        <button id="btn-load" class="spd" title="Загрузить">📂</button>
+        <button data-speed="0" class="spd" title="Пауза (Space)">❚❚</button>
+        <button data-speed="1" class="spd active">▶</button>
+        <button data-speed="2" class="spd">▶▶</button>
+        <button data-speed="3" class="spd">▶▶▶</button>
+      </div>
+    </div>
+  </header>
+
+  <aside id="sidebar">
+    <div class="panel" id="inspector">
+      <div class="panel-title">Инспектор</div>
+      <div class="panel-body" id="inspector-body">Наведите курсор на тайл.</div>
+    </div>
+    <div class="panel" id="schedulep">
+      <div class="panel-title">Расписание цикла</div>
+      <div class="panel-body"><div id="schedule-strip" class="sched"></div>
+        <div class="hint2">Клик по отрезку меняет режим: работа → досуг → гигиена → сон</div></div>
+    </div>
+    <div class="panel" id="researchp">
+      <div class="panel-title">Исследования</div>
+      <div class="panel-body" id="research-body"></div>
+    </div>
+    <div class="panel" id="colonists">
+      <div class="panel-title">Колонисты</div>
+      <div class="panel-body" id="colonist-list"></div>
+    </div>
+  </aside>
+
+  <div id="alerts"></div>
+
+  <footer id="toolbar">
+    <div class="tabs" id="tabs"></div>
+    <div class="tools" id="tools"></div>
+    <div class="hint" id="hint">ЛКМ — применить · ПКМ/Esc — отмена · перетаскивание СКМ — камера · колесо — зум</div>
+  </footer>
+
+  <div id="overlay-toggles">
+    <button data-ov="none" class="ov active">Обзор</button>
+    <button data-ov="gas" class="ov">Газы</button>
+    <button data-ov="temp" class="ov">Тепло</button>
+    <button data-ov="power" class="ov">Энергия</button>
+    <button data-ov="germs" class="ov">Микробы</button>
+    <button data-ov="light" class="ov">Свет</button>
+    <button data-ov="rooms" class="ov">Комнаты</button>
+  </div>
+</div>
+<script type="module">
+// ===== util.js =====================================================
+// Мелкие утилиты: ГПСЧ, шум, математика, имена.
+
+function makeRNG(seed = 1337) {
+  let s = seed >>> 0;
+  return function rng() {
+    s ^= s << 13; s >>>= 0;
+    s ^= s >> 17;
+    s ^= s << 5;  s >>>= 0;
+    return s / 4294967296;
+  };
+}
+
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = t => t * t * (3 - 2 * t);
+const dist2 = (ax, ay, bx, by) => (ax - bx) ** 2 + (ay - by) ** 2;
+
+/** Двумерный value-noise с решёткой заданного масштаба. */
+function makeNoise2D(rng) {
+  const size = 256;
+  const grid = new Float32Array(size * size);
+  for (let i = 0; i < grid.length; i++) grid[i] = rng();
+  const at = (x, y) => grid[(((y % size) + size) % size) * size + (((x % size) + size) % size)];
+  return function noise(x, y) {
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    const tx = smooth(x - x0), ty = smooth(y - y0);
+    return lerp(
+      lerp(at(x0, y0), at(x0 + 1, y0), tx),
+      lerp(at(x0, y0 + 1), at(x0 + 1, y0 + 1), tx),
+      ty
+    );
+  };
+}
+
+/** Фрактальный шум из нескольких октав. */
+function fbm(noise, x, y, octaves = 4, lacunarity = 2, gain = 0.5) {
+  let amp = 1, freq = 1, sum = 0, norm = 0;
+  for (let i = 0; i < octaves; i++) {
+    sum += noise(x * freq, y * freq) * amp;
+    norm += amp;
+    amp *= gain; freq *= lacunarity;
+  }
+  return sum / norm;
+}
+
+function pick(rng, arr) { return arr[Math.floor(rng() * arr.length) % arr.length]; }
+
+const FIRST = ['Ая', 'Бим', 'Вега', 'Гор', 'Дина', 'Ёж', 'Жора', 'Зина', 'Иго', 'Кира',
+  'Лука', 'Мика', 'Ной', 'Оля', 'Пабло', 'Рита', 'Сева', 'Тина', 'Улу', 'Фома', 'Хлоя', 'Юна'];
+const LAST = ['Тик', 'Болт', 'Гайка', 'Пыль', 'Кварц', 'Уголёк', 'Мох', 'Ветер', 'Искра', 'Криль',
+  'Пиксель', 'Медь', 'Слюда', 'Крот', 'Эхо'];
+function randomName(rng) { return `${pick(rng, FIRST)} ${pick(rng, LAST)}`; }
+
+/** Форматирование массы в стиле ONI. */
+function mass(kg) {
+  if (kg >= 1000) return (kg / 1000).toFixed(1) + ' т';
+  if (kg >= 1) return kg.toFixed(1) + ' кг';
+  return (kg * 1000).toFixed(0) + ' г';
+}
+
+// ===== buildings.js ================================================
+// Каталог построек. Данные — здесь, поведение — в machines.js.
+const CAT = {
+  base: 'Базовое', power: 'Энергия', plumb: 'Сантехника', vent: 'Вентиляция',
+  food: 'Еда', sci: 'Наука и быт', deco: 'Комфорт', auto: 'Автоматика',
+};
+
+const BUILDINGS = [
+  null,
+  // --- базовое -------------------------------------------------------------
+  { id: 1,  key: 'ladder',  cat: 'base', name: 'Лестница',  icon: '🪜', cost: { stone: 3 },  work: 6,  climb: true, floor: true },
+  { id: 2,  key: 'tile',    cat: 'base', name: 'Плитка',    icon: '🧱', cost: { stone: 5 },  work: 8,  solid: true },
+  { id: 3,  key: 'bed',     cat: 'base', name: 'Койка',     icon: '🛏', cost: { stone: 10 }, work: 12, floor: true, sleep: true, decor: 2, tech: null },
+  { id: 4,  key: 'bin',     cat: 'base', name: 'Склад',     icon: '📦', cost: { stone: 15 }, work: 10, floor: true, store: 'mat', cap: 400 },
+  { id: 5,  key: 'ration',  cat: 'food', name: 'Холодильник', icon: '🧺', cost: { copper: 10, stone: 10 }, work: 12, floor: true, store: 'food', cap: 600, power: -60, chill: true, tech: 'food1' },
+  { id: 6,  key: 'diffuser', auto: true,cat: 'vent', name: 'Диффузор O₂', icon: '💨', cost: { copper: 20 }, work: 16, floor: true, power: -120, uses: 'algae', net: { auto: true, power: true } },
+  { id: 7,  key: 'generator', cat: 'power', name: 'Ручной генератор', icon: '⚙️', cost: { stone: 20 }, work: 14, floor: true, power: 400, manual: true, net: { auto: true, power: true } },
+  { id: 8,  key: 'battery', cat: 'power', name: 'Батарея',   icon: '🔋', cost: { copper: 15 }, work: 12, floor: true, storeJ: 10000, net: { auto: true, power: true } },
+  { id: 9,  key: 'farm',    cat: 'food', name: 'Грядка',     icon: '🌱', cost: { dirt: 20 },  work: 14, floor: true, farm: true },
+  { id: 10, key: 'skimmer', auto: true, cat: 'vent', name: 'CO₂-фильтр', icon: '🌀', cost: { copper: 20, stone: 10 }, work: 16, floor: true, power: -120, scrub: true, net: { auto: true, power: true }, tech: 'air1' },
+  { id: 11, key: 'table',   cat: 'base', name: 'Стол',       icon: '🍴', cost: { stone: 8 },  work: 8,  floor: true, eat: true, decor: 3 },
+  { id: 12, key: 'lamp', auto: true,    cat: 'deco', name: 'Лампа',      icon: '💡', cost: { copper: 8 }, work: 6,  power: -20, light: 7, net: { auto: true, power: true }, decor: 2, tech: 'power1' },
+
+  // --- проводка и трубы ----------------------------------------------------
+  { id: 13, key: 'wire',    cat: 'power', name: 'Провод',    icon: '➰', cost: { copper: 2 }, work: 3, conduit: 'power' },
+  { id: 14, key: 'lpipe',   cat: 'plumb', name: 'Труба (жидк.)', icon: '🟦', cost: { copper: 3 }, work: 4, conduit: 'liquid', tech: 'plumb1' },
+  { id: 15, key: 'gpipe',   cat: 'vent',  name: 'Труба (газ)',   icon: '🟪', cost: { copper: 3 }, work: 4, conduit: 'gas', tech: 'air1' },
+
+  // --- насосы и вентиляция -------------------------------------------------
+  { id: 16, key: 'lpump', auto: true,   cat: 'plumb', name: 'Насос',      icon: '🛁', cost: { copper: 30 }, work: 18, floor: true, power: -240, net: { auto: true, power: true, liquid: 'out' }, tech: 'plumb1' },
+  { id: 17, key: 'lvent',   cat: 'plumb', name: 'Слив',       icon: '🚿', cost: { copper: 10 }, work: 8,  floor: true, net: { liquid: 'in' }, tech: 'plumb1' },
+  { id: 18, key: 'gpump', auto: true,   cat: 'vent',  name: 'Газовый насос', icon: '🌬', cost: { copper: 30 }, work: 18, floor: true, power: -240, net: { auto: true, power: true, gas: 'out' }, tech: 'air1' },
+  { id: 19, key: 'gvent',   cat: 'vent',  name: 'Вентиляция',  icon: '🔲', cost: { copper: 10 }, work: 8,  floor: true, net: { gas: 'in' }, tech: 'air1' },
+
+  // --- производство --------------------------------------------------------
+  { id: 20, key: 'electro', auto: true, cat: 'vent',  name: 'Электролизёр', icon: '⚗️', cost: { copper: 40 }, work: 24, floor: true, power: -120, net: { auto: true, power: true, liquid: 'in' }, tech: 'air1' },
+  { id: 21, key: 'sieve', auto: true,   cat: 'plumb', name: 'Очиститель воды', icon: '🧽', cost: { copper: 20, stone: 20 }, work: 20, floor: true, power: -120, net: { auto: true, power: true, liquid: 'in' }, uses: 'stone', tech: 'plumb1' },
+  { id: 22, key: 'grill',   cat: 'food',  name: 'Кухня',       icon: '🍳', cost: { copper: 20, stone: 10 }, work: 20, floor: true, power: -240, manualWork: 'cook', net: { auto: true, power: true }, tech: 'food1' },
+  { id: 23, key: 'coalgen', auto: true, cat: 'power', name: 'Угольный генератор', icon: '🏭', cost: { copper: 20, stone: 30 }, work: 24, floor: true, power: 600, uses: 'coal', net: { auto: true, power: true }, tech: 'power1' },
+
+  // --- быт, наука, медицина ------------------------------------------------
+  { id: 24, key: 'outhouse', cat: 'sci',  name: 'Уборная',    icon: '🚽', cost: { stone: 20, dirt: 10 }, work: 12, floor: true, toilet: true },
+  { id: 25, key: 'basin',    cat: 'sci',  name: 'Умывальник', icon: '🚰', cost: { copper: 10, stone: 10 }, work: 10, floor: true, wash: true },
+  { id: 26, key: 'research', cat: 'sci',  name: 'Лаборатория', icon: '🔬', cost: { copper: 20, stone: 20 }, work: 20, floor: true, power: -60, manualWork: 'research', net: { auto: true, power: true } },
+  { id: 27, key: 'medcot',   cat: 'sci',  name: 'Медкойка',   icon: '🩺', cost: { copper: 15, stone: 15 }, work: 16, floor: true, sleep: true, med: true, decor: 1, tech: 'med1' },
+  { id: 28, key: 'door',     cat: 'base', name: 'Дверь',      icon: '🚪', cost: { copper: 10 }, work: 10, door: true, floor: true },
+  { id: 29, key: 'arcade', auto: true,   cat: 'deco', name: 'Игровой автомат', icon: '🕹', cost: { copper: 25, stone: 10 }, work: 18, floor: true, power: -120, fun: 12, net: { auto: true, power: true }, decor: 4, tech: 'rec1' },
+  { id: 30, key: 'sculpt',   cat: 'deco', name: 'Статуя',     icon: '🗿', cost: { stone: 30 },  work: 20, floor: true, decor: 8 },
+  { id: 31, key: 'shower',   cat: 'sci',  name: 'Душ',        icon: '🛀', cost: { copper: 20 }, work: 16, floor: true, wash: true, big: true, net: { liquid: 'in' }, tech: 'plumb1' },
+  // --- автоматика ----------------------------------------------------------
+  { id: 35, key: 'awire',   cat: 'auto', name: 'Логопровод', icon: '🟩', cost: { copper: 2 },  work: 3, conduit: 'auto', tech: 'auto1' },
+  { id: 36, key: 'tsensor', cat: 'auto', name: 'Термодатчик', icon: '🌡', cost: { copper: 10 }, work: 8, floor: true, sensor: 'temp', threshold: 30, above: false, net: { auto: 'out' }, tech: 'auto1' },
+  { id: 37, key: 'psensor', cat: 'auto', name: 'Датчик давления', icon: '📊', cost: { copper: 10 }, work: 8, floor: true, sensor: 'gas', threshold: 1.5, above: false, net: { auto: 'out' }, tech: 'auto1' },
+  { id: 38, key: 'wsensor', cat: 'auto', name: 'Датчик жидкости', icon: '💧', cost: { copper: 10 }, work: 8, floor: true, sensor: 'water', threshold: 400, above: true, net: { auto: 'out' }, tech: 'auto1' },
+  { id: 39, key: 'switch',  cat: 'auto', name: 'Тумблер',    icon: '🎚', cost: { copper: 6 },  work: 6, floor: true, sensor: 'manual', net: { auto: 'out' }, tech: 'auto1' },
+  { id: 34, key: 'suitdock', auto: true, cat: 'vent', name: 'Док скафандров', icon: '🥽', cost: { copper: 30, stone: 10 }, work: 20, floor: true, power: -60, suit: true, net: { auto: true, power: true, gas: 'in' }, tech: 'air1' },
+  { id: 33, key: 'feeder',  cat: 'food', name: 'Кормушка',  icon: '🥣', cost: { copper: 15, stone: 10 }, work: 14, floor: true, uses: 'stone', feeder: true, tech: 'ranch1' },
+  { id: 32, key: 'compost',  cat: 'food', name: 'Компостер',  icon: '🪱', cost: { stone: 20 },  work: 14, floor: true, uses: 'pdirt', tech: 'food1' },
+];
+
+const B_BY_KEY = {};
+for (const b of BUILDINGS) if (b) B_BY_KEY[b.key] = b;
+
+// ===== world.js ====================================================
+// Мир: материалы, постройки, генерация карты, доступ к тайлам.
+
+const W = 128, H = 84, TILE = 16;
+
+// ---------------------------------------------------------------- материалы
+const MATS = [
+  null, // 0 — пустота (газ)
+  { id: 1, name: 'Грунт',        color: '#6d4a2f', color2: '#553823', hard: 1.0, yield: 'dirt',   amount: 8,  heat: 25 },
+  { id: 2, name: 'Песчаник',     color: '#9a8560', color2: '#7a684a', hard: 1.6, yield: 'stone',  amount: 10, heat: 22 },
+  { id: 3, name: 'Гранит',       color: '#7b8592', color2: '#5e6773', hard: 2.8, yield: 'stone',  amount: 14, heat: 20 },
+  { id: 4, name: 'Угольный пласт', color: '#3a3a40', color2: '#26262b', hard: 2.0, yield: 'coal', amount: 10, heat: 21 },
+  { id: 5, name: 'Медная руда',  color: '#b4703c', color2: '#8c5329', hard: 2.4, yield: 'copper', amount: 10, heat: 21 },
+  { id: 6, name: 'Лёд',          color: '#a8dced', color2: '#7fc0d6', hard: 0.7, yield: 'ice',    amount: 8,  heat: -8 },
+  { id: 7, name: 'Водорослевый нарост', color: '#5d8f4e', color2: '#436b38', hard: 1.1, yield: 'algae', amount: 8, heat: 23 },
+  { id: 8, name: 'Абиссалит',    color: '#4b4258', color2: '#372f42', hard: Infinity, yield: null, amount: 0, heat: 18 },
+  { id: 9, name: 'Слизь',        color: '#6f8f4a', color2: '#55703a', hard: 0.9, yield: 'slime',  amount: 8,  heat: 26, germs: 'slimelung' },
+  { id: 10, name: 'Загрязнённый грунт', color: '#5a5a33', color2: '#444427', hard: 1.0, yield: 'pdirt', amount: 8, heat: 24, germs: 'food' },
+];
+
+const RESOURCES = {
+  dirt:   { name: 'Грунт',      icon: '🟤' },
+  stone:  { name: 'Камень',     icon: '🪨' },
+  coal:   { name: 'Уголь',      icon: '⚫' },
+  copper: { name: 'Медь',       icon: '🟠' },
+  ice:    { name: 'Лёд',        icon: '🧊' },
+  algae:  { name: 'Водоросли',  icon: '🟢' },
+  slime:  { name: 'Слизь',      icon: '🟩' },
+  pdirt:  { name: 'Гряз. грунт',icon: '🟫' },
+  food:   { name: 'Еда',        icon: '🍽' },
+  meal:   { name: 'Блюдо',      icon: '🍲' },
+};
+
+// Постройки вынесены в buildings.js
+
+const LAYER = { power: 1, liquid: 2, gas: 3, auto: 4 };
+const GAS_CAP = 2.2;      // кг/тайл — «комфортное» давление
+const BREATH_MIN = 0.12;  // ниже этого дупликант задыхается
+
+class World {
+  constructor(seed = Date.now() & 0xffff) {
+    this.seed = seed;
+    this.rng = makeRNG(seed || 1);
+    this.mat = new Uint8Array(W * H);
+    this.back = new Uint8Array(W * H);      // «задняя стена» биома — фон за выкопанным
+    this.digProg = new Float32Array(W * H);
+    this.dig = new Uint8Array(W * H);       // помечено к добыче
+    this.bid = new Uint8Array(W * H);       // здания (слой 0)
+    this.cond = {                            // слои коммуникаций, как в ONI
+      power: new Uint8Array(W * H),
+      liquid: new Uint8Array(W * H),
+      gas: new Uint8Array(W * H),
+      auto: new Uint8Array(W * H),
+    };
+    this.bdata = new Map();                 // key(x,y,layer) -> состояние постройки
+    this.items = new Map();                 // idx -> {res: кг}
+    this.o2 = new Float32Array(W * H);
+    this.co2 = new Float32Array(W * H);
+    this.steam = new Float32Array(W * H);
+    this.h2 = new Float32Array(W * H);
+    this.water = new Float32Array(W * H);   // кг воды в тайле
+    this.pwater = new Float32Array(W * H);  // доля загрязнённой воды 0..1
+    this.germs = new Float32Array(W * H);   // условные единицы микробов
+    this.phase = new Float32Array(W * H);   // накопленный фазовый переход (таяние/замерзание), кг
+    this.vents = [];
+    this.temp = new Float32Array(W * H);
+    this.light = new Float32Array(W * H);
+    this.generate();
+  }
+
+  idx(x, y) { return y * W + x; }
+  /** Ключ в bdata: слой 0 — здание, 1/2/3 — провод/труба/вентиляция. */
+  key(x, y, layer = 0) { return (y * W + x) * 8 + layer; }
+  static layerOf(def) { return def.conduit ? LAYER[def.conduit] : 0; }
+  stateAt(x, y, layer = 0) { return this.bdata.get(this.key(x, y, layer)) || null; }
+  inside(x, y) { return x >= 0 && y >= 0 && x < W && y < H; }
+  matAt(x, y) { return this.inside(x, y) ? this.mat[y * W + x] : 8; }
+  buildAt(x, y) { return this.inside(x, y) ? this.bid[y * W + x] : 0; }
+  bdef(x, y) { return BUILDINGS[this.buildAt(x, y)] || null; }
+  bstate(x, y) { return this.bdata.get(this.key(x, y, 0)) || null; }
+  /** Все постройки тайла по слоям. */
+  allAt(x, y) {
+    const out = [];
+    for (let l = 0; l < 5; l++) { const st = this.bdata.get(this.key(x, y, l)); if (st) out.push(st); }
+    return out;
+  }
+
+  /** Тайл перекрывает газ и жидкость (порода, стена или закрытая дверь). */
+  gasBlocked(i) {
+    if (this.mat[i]) return true;
+    const b = BUILDINGS[this.bid[i]];
+    if (!b || (!b.solid && !b.door)) return false;
+    const st = this.bdata.get(i * 8);
+    return !!(st && st.built);
+  }
+
+  /** Тайл непроходим (порода или достроенная стена). */
+  solid(x, y) {
+    if (!this.inside(x, y)) return true;
+    const i = y * W + x;
+    if (this.mat[i]) return true;
+    const b = BUILDINGS[this.bid[i]];
+    const st = this.bdata.get(i * 8);
+    return !!(b && b.solid && st && st.built);
+  }
+
+  /** На этом тайле можно стоять (есть опора снизу или лестница). */
+  standable(x, y) {
+    if (this.solid(x, y)) return false;
+    const b = BUILDINGS[this.bid[y * W + x]];
+    const st = this.bdata.get((y * W + x) * 8);
+    if (b && b.climb && st && st.built) return true;
+    if (this.solid(x, y + 1)) return true;
+    const bb = BUILDINGS[this.bid[(y + 1) * W + x]] , bs = this.bdata.get(((y + 1) * W + x) * 8);
+    return !!(bb && (bb.floor || bb.climb) && bs && bs.built);
+  }
+
+  climbable(x, y) {
+    const b = BUILDINGS[this.bid[y * W + x]], st = this.bdata.get((y * W + x) * 8);
+    return !!(b && b.climb && st && st.built);
+  }
+
+  // ------------------------------------------------------------- генерация
+  generate() {
+    const n1 = makeNoise2D(this.rng), n2 = makeNoise2D(this.rng), n3 = makeNoise2D(this.rng);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        if (x === 0 || y === 0 || x === W - 1 || y === H - 1) { this.mat[i] = 8; continue; }
+
+        const depth = y / H;
+        const surface = 8 + fbm(n1, x * 0.035, 0.5, 4) * 7;
+        if (y < surface) { this.mat[i] = 0; this.back[i] = 0; continue; }   // космос над поверхностью
+
+        const cave = fbm(n2, x * 0.07, y * 0.09, 4);
+        const hollow = cave > 0.63 && y > surface + 3;
+
+        let m = 1;
+        if (depth > 0.22) m = 2;
+        if (depth > 0.55) m = 3;
+        const ore = fbm(n3, x * 0.12 + 40, y * 0.12, 3);
+        if (ore > 0.70 && depth > 0.3) m = 4;                       // уголь
+        else if (ore < 0.27 && depth > 0.25) m = 5;                 // медь
+        if (depth > 0.75 && fbm(n2, x * 0.05 - 20, y * 0.05, 2) > 0.58) m = 6; // ледяной биом
+        if (depth < 0.35 && cave > 0.55 && cave <= 0.63) m = 7;     // водоросли у пещер
+        if (depth > 0.38 && depth < 0.62 && cave > 0.52 && cave <= 0.63) m = 9;  // болото со слизью
+        if (depth > 0.38 && depth < 0.62 && ore > 0.62 && m === 2) m = 10;       // загрязнённый грунт
+        if (depth > 0.92) m = 8;
+        this.back[i] = m;
+        this.mat[i] = hollow ? 0 : m;
+        this.temp[i] = MATS[m].heat;
+      }
+    }
+
+    // стартовая каверна с кислородом
+    const cx = (W >> 1), cy = Math.floor(H * 0.30);
+    for (let y = cy - 6; y <= cy + 5; y++) {
+      for (let x = cx - 11; x <= cx + 11; x++) {
+        if (!this.inside(x, y)) continue;
+        const d = ((x - cx) / 11) ** 2 + ((y - cy) / 6) ** 2;
+        if (d < 1) {
+          const i = y * W + x;
+          if (!this.back[i]) this.back[i] = 1;
+          this.mat[i] = 0; this.o2[i] = 2.2; this.co2[i] = 0; this.temp[i] = 22;
+        }
+      }
+    }
+    // герметичная скорлупа вокруг стартовой каверны — базу надо вскрывать самому
+    for (let y = cy - 8; y <= cy + 7; y++) {
+      for (let x = cx - 14; x <= cx + 14; x++) {
+        if (!this.inside(x, y)) continue;
+        const d = ((x - cx) / 11) ** 2 + ((y - cy) / 6) ** 2;
+        if (d >= 1 && d < 1.6) {
+          const i = y * W + x;
+          if (!this.mat[i]) { this.mat[i] = 2; this.temp[i] = MATS[2].heat; if (!this.back[i]) this.back[i] = 2; }
+          this.o2[i] = 0; this.co2[i] = 0; this.water[i] = 0;
+        }
+      }
+    }
+
+    // пол каверны
+    for (let x = cx - 11; x <= cx + 11; x++) {
+      const y = cy + 5;
+      if (this.inside(x, y) && !this.mat[y * W + x]) this.mat[y * W + x] = 2;
+    }
+    this.start = { x: cx, y: cy + 4 };
+
+    // подземные водоёмы: пещеры ниже середины карты заполняются водой
+    for (let y = Math.floor(H * 0.58); y < H - 2; y++) {
+      for (let x = 1; x < W - 1; x++) {
+        const i = y * W + x;
+        if (this.mat[i]) continue;
+        let roof = false;
+        for (let k = 1; k <= 3; k++) if (this.mat[i - k * W]) { roof = true; break; }
+        if (!roof) continue;
+        this.water[i] = 1000;
+        this.temp[i] = y / H > 0.8 ? 6 : 18;
+        if (y / H > 0.72 && ((x * 31 + y * 17) % 7 === 0)) { this.pwater[i] = 1; this.germs[i] = 200; }
+      }
+    }
+
+    // гейзеры и вулканические жерла (подальше от базы)
+    const ventTypes = ['steam', 'water', 'co2', 'h2'];
+    for (let n = 0; n < 6; n++) {
+      for (let tries = 0; tries < 400; tries++) {
+        const x = 3 + Math.floor(this.rng() * (W - 6));
+        const y = Math.floor(H * 0.35 + this.rng() * H * 0.55);
+        const i = y * W + x;
+        if (this.mat[i] || this.mat[i + W] === 0 || this.water[i] > 10) continue;
+        if (Math.abs(x - this.start.x) < 16 && Math.abs(y - this.start.y) < 10) continue;  // не в базе
+        const type = ventTypes[n % ventTypes.length];
+        this.vents.push({ x, y, type, t: this.rng() * 200, period: 220 + this.rng() * 260, active: false, rate: 0.6 + this.rng() });
+        break;
+      }
+    }
+
+    // атмосфера в пустотах (немного кислорода в пещерах, углекислота внизу)
+    for (let y = 1; y < H - 1; y++) {
+      for (let x = 1; x < W - 1; x++) {
+        const i = y * W + x;
+        if (this.mat[i]) continue;
+        if (this.o2[i] || this.co2[i]) continue;
+        if (y < 9) continue;                     // космос сверху — вакуум
+        const deep = y / H;
+        this.o2[i] = 0.35 * (1 - deep) + 0.05;
+        this.co2[i] = 0.25 * deep;
+        this.temp[i] = 18 + deep * 12;
+      }
+    }
+  }
+
+  // --------------------------------------------------------------- предметы
+  addItem(x, y, res, amt) {
+    if (!this.inside(x, y) || amt <= 0) return;
+    const i = this.idx(x, y);
+    const pile = this.items.get(i) || {};
+    pile[res] = (pile[res] || 0) + amt;
+    this.items.set(i, pile);
+  }
+  takeItem(i, res, amt) {
+    const pile = this.items.get(i);
+    if (!pile || !pile[res]) return 0;
+    const got = Math.min(pile[res], amt);
+    pile[res] -= got;
+    if (pile[res] <= 1e-6) delete pile[res];
+    if (!Object.keys(pile).length) this.items.delete(i);
+    return got;
+  }
+
+  // -------------------------------------------------------------- постройки
+  canPlace(x, y, def) {
+    const i = this.idx(x, y);
+    if (!this.inside(x, y) || this.mat[i]) return false;
+    if (def.conduit) return !this.cond[def.conduit][i];
+    if (this.bid[i]) return false;
+    if (def.climb || def.solid || def.door) return true;
+    return this.standable(x, y) || this.solid(x, y + 1);
+  }
+
+  place(x, y, def) {
+    const i = this.idx(x, y);
+    const layer = World.layerOf(def);
+    if (def.conduit) this.cond[def.conduit][i] = def.id; else this.bid[i] = def.id;
+    this.bdata.set(this.key(x, y, layer),
+      { built: false, prog: 0, def, x, y, layer, store: {}, charge: 0, growth: 0, powered: false, net: {} });
+    this.netDirty = true;
+  }
+
+  removeBuilding(x, y, layer = 0) {
+    const i = this.idx(x, y);
+    const k = this.key(x, y, layer);
+    const st = this.bdata.get(k);
+    if (!st) return;
+    if (st.built) {
+      for (const [res, amt] of Object.entries(st.def.cost)) this.addItem(x, y, res, amt * 0.5);
+      for (const [res, amt] of Object.entries(st.store || {})) this.addItem(x, y, res, amt);
+    }
+    if (st.def.conduit) this.cond[st.def.conduit][i] = 0; else this.bid[i] = 0;
+    this.bdata.delete(k);
+    this.netDirty = true;
+  }
+
+  /** Добыча тайла: возвращает true, когда порода разрушена. */
+  mine(x, y, work) {
+    const i = this.idx(x, y);
+    const m = MATS[this.mat[i]];
+    if (!m || m.hard === Infinity) return false;
+    this.digProg[i] += work / m.hard;
+    if (this.digProg[i] < 10) return false;
+    this.mat[i] = 0;
+    this.digProg[i] = 0;
+    this.dig[i] = 0;
+    if (m.germs) this.germs[i] += 250;          // вскрытая слизь пылит микробами
+    if (m.yield) this.addItem(x, y, m.yield, m.amount);
+    this.temp[i] = m.heat;
+    return true;
+  }
+}
+
+// ===== fluid.js ====================================================
+// Физика флюидов: давление газа, плавучесть по плотности, жидкости со сжатием,
+// фазовые переходы (лёд ↔ вода ↔ пар), перенос тепла вместе с массой.
+
+// ---- газы: молярная масса (кг/кмоль) определяет, что всплывает, а что оседает
+const GASES = [
+  { key: 'o2',    name: 'Кислород',       M: 32, color: [120, 200, 235] },
+  { key: 'co2',   name: 'Углекислый газ', M: 44, color: [120, 120, 130] },
+  { key: 'steam', name: 'Водяной пар',    M: 18, color: [225, 235, 240] },
+  { key: 'h2',    name: 'Водород',        M: 2,  color: [200, 160, 235] },
+];
+
+const LIQ_FULL = 1000;     // кг воды в «полном» тайле
+const LIQ_MAX_COMP = 1.03;        // сжатие столба
+const LIQ_FLOW = 420;             // максимум переноса за шаг, кг
+const GAS_DIFF = 0.26;            // выравнивание давления газа
+const GAS_SORT = 0.16;            // разделение по плотности
+const HEAT_K = 0.055;
+
+// удельная теплоёмкость, кДж/(кг·°C)
+const C_GAS = 1.0, C_WATER = 4.18, C_SOLID = 0.8;
+// скрытая теплота, кДж/кг
+const L_FUSION = 334, L_VAPOR = 2260;
+const ICE_MASS = 400, C_ICE = 2.0;
+
+function stepFluids(world, dt) {
+  stepLiquid(world, dt);
+  stepGerms(world, dt);
+  stepGas(world, dt);
+  displaceGas(world);
+  stepPhases(world, dt);
+  stepHeat(world, dt);
+}
+
+function blockedAt(world, i) { return world.gasBlocked(i); }
+
+/** Смешение температур при переносе массы m из a в b (mb — масса приёмника). */
+function advect(temp, a, b, m, mb, c) {
+  if (m <= 0) return;
+  const cb = mb * c + 1e-6;
+  temp[b] = (temp[b] * cb + temp[a] * m * c) / (cb + m * c);
+}
+
+// --------------------------------------------------------------- жидкости
+function stepLiquid(world, dt) {
+  const { water, temp } = world;
+  const blocked = i => blockedAt(world, i);
+  const stable = (total) => {
+    // сколько должно остаться в нижней клетке вертикальной пары
+    if (total <= LIQ_FULL) return total;
+    if (total < 2 * LIQ_FULL * LIQ_MAX_COMP) return (LIQ_FULL * LIQ_MAX_COMP * LIQ_FULL + total) / (LIQ_FULL * LIQ_MAX_COMP + LIQ_FULL);
+    return (total + LIQ_FULL * LIQ_MAX_COMP) / 2;
+  };
+  const flowLimit = LIQ_FLOW * Math.min(1, dt * 60);
+
+  for (let y = H - 2; y >= 1; y--) {
+    for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x;
+      let w = water[i];
+      if (w < 0.05 || blocked(i)) continue;
+      let remaining = w;
+
+      // вниз
+      const d = i + W;
+      if (!blocked(d)) {
+        let f = stable(remaining + water[d]) - water[d];
+        f = Math.max(0, Math.min(f, flowLimit, remaining));
+        if (f > 0.01) {
+          advect(temp, i, d, f, water[d], C_WATER);
+          water[i] -= f; water[d] += f; remaining -= f;
+        }
+      }
+      if (remaining < 0.05) continue;
+
+      // в стороны
+      for (const s of [i - 1, i + 1]) {
+        if (blocked(s)) continue;
+        let f = (remaining - water[s]) / 3;
+        f = Math.max(0, Math.min(f, flowLimit, remaining));
+        if (f > 0.01) {
+          advect(temp, i, s, f, water[s], C_WATER);
+          water[i] -= f; water[s] += f; remaining -= f;
+        }
+      }
+      if (remaining < 0.05) continue;
+
+      // вверх — только под давлением столба
+      const u = i - W;
+      if (!blocked(u)) {
+        let f = remaining - stable(remaining + water[u]);
+        f = Math.max(0, Math.min(f, flowLimit, remaining));
+        if (f > 0.01) {
+          advect(temp, i, u, f, water[u], C_WATER);
+          water[i] -= f; water[u] += f;
+        }
+      }
+    }
+  }
+}
+
+// ------------------------------------------------------------------ газы
+function totalGas(world, i) {
+  return world.o2[i] + world.co2[i] + world.steam[i] + world.h2[i];
+}
+
+/** Доля объёма тайла, занятая жидкостью: чем больше воды, тем меньше места газу. */
+function gasRoom(world, i) {
+  return Math.max(0, 1 - world.water[i] / LIQ_FULL);
+}
+
+function stepGas(world, dt) {
+  const arr = [world.o2, world.co2, world.steam, world.h2];
+  const { temp } = world;
+  const k = Math.min(0.5, GAS_DIFF * dt * 60);
+  const ks = Math.min(0.4, GAS_SORT * dt * 60);
+  const blocked = i => blockedAt(world, i);
+
+  const move = (a, b, frac) => {
+    // перенос доли frac всей газовой смеси из a в b + перенос тепла
+    const ta = totalGas(world, a);
+    if (ta <= 1e-6 || frac <= 0) return;
+    const m = ta * frac;
+    advect(temp, a, b, m, totalGas(world, b), C_GAS);
+    for (const g of arr) { const d = g[a] * frac; g[a] -= d; g[b] += d; }
+  };
+
+  // 1. выравнивание давления (с поправкой на занятый водой объём)
+  const pass = (ia, ib) => {
+    if (blocked(ia) || blocked(ib)) return;
+    const ra = gasRoom(world, ia), rb = gasRoom(world, ib);
+    if (ra < 0.02 || rb < 0.02) return;
+    const pa = totalGas(world, ia) / ra, pb = totalGas(world, ib) / rb;
+    const diff = (pa - pb) * k * 0.5;
+    if (Math.abs(diff) < 1e-5) return;
+    if (diff > 0) move(ia, ib, Math.min(0.5, diff / Math.max(pa, 1e-6)));
+    else move(ib, ia, Math.min(0.5, -diff / Math.max(pb, 1e-6)));
+  };
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 2; x++) { const i = y * W + x; pass(i, i + 1); }
+  for (let y = 1; y < H - 2; y++) for (let x = 1; x < W - 1; x++) { const i = y * W + x; pass(i, i + W); }
+
+  // 2. разделение по плотности: тяжёлые газы вниз, лёгкие вверх
+  for (let y = 1; y < H - 2; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const a = y * W + x, b = a + W;           // a сверху, b снизу
+      if (blocked(a) || blocked(b)) continue;
+      if (gasRoom(world, a) < 0.02 || gasRoom(world, b) < 0.02) continue;
+      const ta = totalGas(world, a), tb = totalGas(world, b);
+      if (ta < 1e-4 && tb < 1e-4) continue;
+      for (let gi = 0; gi < arr.length; gi++) {
+        const M = GASES[gi].M;
+        // средняя молярная масса соседа — куда стремится эта фракция
+        const Ma = meanM(world, a, ta), Mb = meanM(world, b, tb);
+        const g = arr[gi];
+        if (M > Mb + 0.5 && g[a] > 1e-5) {      // тяжелее нижнего — тонет
+          const d = g[a] * ks * 0.5;
+          advect(world.temp, a, b, d, tb, C_GAS);
+          g[a] -= d; g[b] += d;
+        } else if (M < Ma - 0.5 && g[b] > 1e-5) { // легче верхнего — всплывает
+          const d = g[b] * ks * 0.5;
+          advect(world.temp, b, a, d, ta, C_GAS);
+          g[b] -= d; g[a] += d;
+        }
+      }
+    }
+  }
+
+  // 3. космос сверху: атмосфера улетучивается
+  for (let x = 1; x < W - 1; x++) {
+    for (let y = 1; y < 6; y++) {
+      const i = y * W + x;
+      if (blocked(i)) continue;
+      for (const g of arr) g[i] *= 0.90;
+    }
+  }
+}
+
+function meanM(world, i, total) {
+  if (total <= 1e-6) return 29;
+  return (world.o2[i] * 32 + world.co2[i] * 44 + world.steam[i] * 18 + world.h2[i] * 2) / total;
+}
+
+/** Вода вытесняет газ: из затопленных тайлов газ уходит вверх/в стороны. */
+function displaceGas(world) {
+  const arr = [world.o2, world.co2, world.steam, world.h2];
+  for (let y = H - 2; y >= 1; y--) {
+    for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x;
+      if (world.water[i] < LIQ_FULL * 0.9) continue;
+      const t = totalGas(world, i);
+      if (t < 1e-4) continue;
+      for (const n of [i - W, i - 1, i + 1]) {
+        if (blockedAt(world, n) || world.water[n] > LIQ_FULL * 0.9) continue;
+        for (const g of arr) { g[n] += g[i]; g[i] = 0; }
+        break;
+      }
+    }
+  }
+}
+
+// ------------------------------------------------------- фазовые переходы
+function stepPhases(world, dt) {
+  const { water, steam, temp, mat } = world;
+  const rate = Math.min(1, dt * 1.5);
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x;
+
+      // --- лёд тает: сколько растает, ограничено доступным теплом
+      if (mat[i] === 6) {
+        if (temp[i] > 0) {
+          const heat = temp[i] * ICE_MASS * C_ICE;          // кДж выше точки плавления
+          const melted = Math.min(ICE_MASS, heat / L_FUSION) * Math.min(1, dt);
+          world.phase[i] += melted;
+          temp[i] -= melted * L_FUSION / (ICE_MASS * C_ICE);
+          if (world.phase[i] >= ICE_MASS) {
+            mat[i] = 0; world.digProg[i] = 0; world.phase[i] = 0;
+            water[i] += ICE_MASS; temp[i] = 0;
+          }
+        } else if (world.phase[i] > 0) {
+          world.phase[i] = Math.max(0, world.phase[i] - 5 * dt);  // подмерзает обратно
+        }
+        continue;
+      }
+
+      if (mat[i]) continue;
+
+      // --- вода замерзает: скрытая теплота греет остаток
+      if (water[i] > 1 && temp[i] < 0) {
+        const cool = -temp[i] * water[i] * C_WATER;
+        const frozen = Math.min(water[i], cool / L_FUSION) * Math.min(1, dt);
+        if (frozen > 0) {
+          water[i] -= frozen;
+          world.phase[i] += frozen;
+          temp[i] += frozen * L_FUSION / (water[i] * C_WATER + 1);
+          if (world.phase[i] >= ICE_MASS * 0.8 && water[i] < 30 && !world.bid[i]) {
+            mat[i] = 6; world.phase[i] = 0; water[i] = 0; temp[i] = Math.min(temp[i], -0.5);
+            continue;
+          }
+        }
+      } else if (world.phase[i] > 0 && temp[i] > 0.5) {
+        world.phase[i] = Math.max(0, world.phase[i] - 5 * dt);
+      }
+      // вода → пар (кипение и медленное испарение в сухой воздух)
+      if (water[i] > 0.5) {
+        if (temp[i] > 100) {
+          const heat = (temp[i] - 100) * water[i] * C_WATER;
+          const ev = Math.min(water[i], heat / L_VAPOR) * rate;
+          water[i] -= ev; steam[i] += ev;
+          temp[i] -= ev * L_VAPOR / (water[i] * C_WATER + ev * C_GAS + 1);
+        } else if (temp[i] > 15 && steam[i] < 0.4) {
+          const ev = Math.min(water[i], 0.02 * rate);
+          water[i] -= ev; steam[i] += ev; temp[i] -= 0.02 * rate;
+        }
+      }
+      // пар → вода
+      if (steam[i] > 1e-4 && temp[i] < 97) {
+        const cond = steam[i] * Math.min(0.5, (97 - temp[i]) * 0.02 * rate);
+        steam[i] -= cond; water[i] += cond;
+        temp[i] += cond * L_VAPOR / (water[i] * C_WATER + 1) * 0.02;
+      }
+      if (water[i] < 0.01) water[i] = 0;
+    }
+  }
+}
+
+// ---------------------------------------------------------------- микробы
+/** Микробы живут в грязной воде и слизи, гибнут в чистом кислороде и на морозе. */
+function stepGerms(world, dt) {
+  const { germs, water, pwater, temp, o2, mat } = world;
+  const k = Math.min(0.3, 0.12 * dt * 60);
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x;
+      let g = germs[i];
+      if (mat[i] === 9) { germs[i] = Math.max(g, 120); continue; }   // слизь — источник
+      if (g <= 0.01) { germs[i] = 0; continue; }
+      // среда
+      let decay = 0.03;                       // базовое отмирание
+      if (water[i] > 20 && pwater[i] > 0.4) decay = -0.01;           // грязная вода — рассадник
+      else if (o2[i] > 0.4) decay = 0.09;                            // чистый кислород убивает
+      if (temp[i] < -2 || temp[i] > 60) decay += 0.3;                // мороз и жар
+      g *= Math.max(0, 1 - decay * dt);
+      // расползание по воздуху и воде
+      for (const n of [i - 1, i + 1, i - W, i + W]) {
+        if (world.gasBlocked(n)) continue;
+        const d = (g - germs[n]) * k * 0.12;
+        if (d > 0) { g -= d; germs[n] += d; }
+      }
+      germs[i] = g < 0.01 ? 0 : g;
+    }
+  }
+}
+
+// ------------------------------------------------------------------ тепло
+function stepHeat(world, dt) {
+  const { temp, mat, water } = world;
+  const k = Math.min(0.25, HEAT_K * dt * 60);
+  const cap = i => mat[i] ? C_SOLID * 20 : (water[i] * C_WATER * 0.02 + totalGas(world, i) * C_GAS + 0.4);
+  const pair = (a, b) => {
+    const ca = cap(a), cb = cap(b);
+    const d = (temp[a] - temp[b]) * k * (ca * cb) / ((ca + cb) * Math.max(ca, cb)) * 2;
+    temp[a] -= d * cb / (ca + cb) * 2 * 0.5;
+    temp[b] += d * ca / (ca + cb) * 2 * 0.5;
+  };
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 2; x++) { const i = y * W + x; pair(i, i + 1); }
+  for (let y = 1; y < H - 2; y++) for (let x = 1; x < W - 1; x++) { const i = y * W + x; pair(i, i + W); }
+}
+
+/** Освещение: солнце сверху + лампы. */
+function stepLight(world) {
+  const { light, mat, bdata } = world;
+  light.fill(0);
+  for (let x = 1; x < W - 1; x++) {
+    let l = 1;
+    for (let y = 1; y < H - 1; y++) {
+      const i = y * W + x;
+      light[i] = Math.max(light[i], l);
+      if (mat[i]) l = 0; else l *= world.water[i] > 100 ? 0.94 : 0.985;
+      if (l < 0.02) break;
+    }
+  }
+  for (const [i, st] of bdata) {
+    if (!st.built || !st.def.light || !st.powered) continue;
+    const r = st.def.light, bx = i % W, by = (i / W) | 0;
+    for (let y = by - r; y <= by + r; y++)
+      for (let x = bx - r; x <= bx + r; x++) {
+        if (x < 1 || y < 1 || x >= W - 1 || y >= H - 1) continue;
+        const d = Math.hypot(x - bx, y - by);
+        if (d > r) continue;
+        const j = y * W + x;
+        light[j] = Math.min(1, light[j] + (1 - d / r) * 0.9);
+      }
+  }
+}
+
+// ===== plants.js ===================================================
+// Растения: у каждого свои требования к среде. Не выполнены — рост стоит.
+const PLANTS = {
+  mealwood: {
+    name: 'Мучное дерево', icon: '🌾', yield: 'food', amount: 20, time: 150,
+    needs: { dirt: 0.02 }, temp: [5, 35], light: null, water: 0,
+    hint: 'грунт, 5…35 °C',
+  },
+  bristle: {
+    name: 'Щетинистая почка', icon: '🌼', yield: 'food', amount: 34, time: 200,
+    needs: { dirt: 0.01 }, temp: [5, 30], light: 0.45, water: 0.6,
+    hint: 'свет, вода, 5…30 °C',
+  },
+  mushroom: {
+    name: 'Пузырчатый гриб', icon: '🍄', yield: 'food', amount: 26, time: 240,
+    needs: { slime: 0.03 }, temp: [10, 45], light: -0.2, water: 0,
+    hint: 'слизь, темнота',
+  },
+  sleetwheat: {
+    name: 'Морозная пшеница', icon: '❄️', yield: 'food', amount: 30, time: 300,
+    needs: { dirt: 0.01 }, temp: [-30, 5], light: null, water: 0.3,
+    hint: 'холод ниже 5 °C',
+  },
+};
+
+/** Подобрать культуру под условия тайла. */
+function chooseCrop(world, i) {
+  const t = world.temp[i], l = world.light[i];
+  let best = 'mealwood', score = -1;
+  for (const [key, p] of Object.entries(PLANTS)) {
+    let s = 0;
+    if (t < p.temp[0] || t > p.temp[1]) continue;
+    s += 1;
+    if (p.light !== null) s += p.light > 0 ? (l >= p.light ? 1 : -1) : (l < 0.25 ? 1 : -1);
+    s += p.amount / 40;
+    if (s > score) { score = s; best = key; }
+  }
+  return best;
+}
+
+/** Проверка условий роста. Возвращает {ok, reason}. */
+function checkPlant(world, st, i) {
+  const p = PLANTS[st.plant];
+  if (!p) return { ok: false, reason: 'нет культуры' };
+  const t = world.temp[i];
+  if (t < p.temp[0]) return { ok: false, reason: 'холодно' };
+  if (t > p.temp[1]) return { ok: false, reason: 'жарко' };
+  if (p.light !== null) {
+    if (p.light > 0 && world.light[i] < p.light) return { ok: false, reason: 'мало света' };
+    if (p.light < 0 && world.light[i] > 0.25) return { ok: false, reason: 'слишком светло' };
+  }
+  if (p.water > 0 && (st.store.water || 0) <= 0) return { ok: false, reason: 'нужна вода' };
+  const [res, rate] = Object.entries(p.needs)[0];
+  if ((st.store[res] || 0) <= 0) return { ok: false, reason: `нужен ресурс: ${res}` };
+  return { ok: true, res, rate, plant: p };
+}
+
+// ===== path.js =====================================================
+// A* по тайлам: ходьба по полу, лазание по лестницам, падения.
+
+class Heap {
+  constructor() { this.a = []; }
+  get size() { return this.a.length; }
+  push(node, f) {
+    this.a.push({ node, f });
+    let i = this.a.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (this.a[p].f <= this.a[i].f) break;
+      [this.a[p], this.a[i]] = [this.a[i], this.a[p]]; i = p;
+    }
+  }
+  pop() {
+    const top = this.a[0], last = this.a.pop();
+    if (this.a.length) {
+      this.a[0] = last;
+      let i = 0;
+      for (;;) {
+        const l = i * 2 + 1, r = l + 1; let m = i;
+        if (l < this.a.length && this.a[l].f < this.a[m].f) m = l;
+        if (r < this.a.length && this.a[r].f < this.a[m].f) m = r;
+        if (m === i) break;
+        [this.a[m], this.a[i]] = [this.a[i], this.a[m]]; i = m;
+      }
+    }
+    return top.node;
+  }
+}
+
+/** Куда можно шагнуть из (x,y). cb(nx, ny, cost). */
+function neighbors(world, x, y, cb) {
+  const onFoot = world.standable(x, y) || world.climbable(x, y);
+  if (onFoot) {
+    for (const dx of [-1, 1]) {
+      const nx = x + dx;
+      if (world.solid(nx, y)) continue;
+      if (world.standable(nx, y) || world.climbable(nx, y)) { cb(nx, y, 1); continue; }
+      // подъём на ступеньку в один тайл — как дупликанты в ONI
+      if (world.solid(nx, y) && !world.solid(nx, y - 1) && !world.solid(x, y - 1)
+          && (world.standable(nx, y - 1) || world.climbable(nx, y - 1))) { cb(nx, y - 1, 1.4); continue; }
+      if (world.solid(nx, y)) continue;
+      // шаг в пустоту: падаем, если внизу есть куда приземлиться
+      let fy = y;
+      while (fy - y < 8 && !world.solid(nx, fy + 1) && !world.standable(nx, fy + 1)) fy++;
+      if (!world.solid(nx, fy + 1) || world.standable(nx, fy + 1)) {
+        if (world.standable(nx, fy + 1)) cb(nx, fy + 1, 1 + (fy - y) * 0.6);
+      }
+    }
+  }
+  if (world.climbable(x, y) && !world.solid(x, y - 1)) cb(x, y - 1, 1.3);
+  if (!world.solid(x, y + 1) && (world.climbable(x, y + 1) || world.standable(x, y + 1))) cb(x, y + 1, 1.1);
+}
+
+/**
+ * Путь от (sx,sy) до любой из целевых клеток.
+ * goals — Set индексов. Возвращает массив [{x,y}, ...] или null.
+ */
+function findPath(world, sx, sy, goals, limit = 7000) {
+  if (!goals || !goals.size) return null;
+  const start = sy * W + sx;
+  if (goals.has(start)) return [];
+  const came = new Map(), g = new Map();
+  const open = new Heap();
+  // эвристика — до ближайшей цели
+  let gx = 0, gy = 0, best = Infinity;
+  for (const gi of goals) {
+    const x = gi % W, y = (gi / W) | 0;
+    const d = Math.abs(x - sx) + Math.abs(y - sy);
+    if (d < best) { best = d; gx = x; gy = y; }
+  }
+  const h = (x, y) => Math.abs(x - gx) + Math.abs(y - gy);
+  g.set(start, 0);
+  open.push(start, h(sx, sy));
+  let visited = 0;
+
+  while (open.size) {
+    const cur = open.pop();
+    if (goals.has(cur)) {
+      const path = [];
+      let c = cur;
+      while (c !== start) { path.push({ x: c % W, y: (c / W) | 0 }); c = came.get(c); }
+      return path.reverse();
+    }
+    if (++visited > limit) break;
+    const cx = cur % W, cy = (cur / W) | 0, cg = g.get(cur);
+    neighbors(world, cx, cy, (nx, ny, cost) => {
+      const ni = ny * W + nx;
+      const ng = cg + cost;
+      if (g.has(ni) && g.get(ni) <= ng) return;
+      g.set(ni, ng); came.set(ni, cur);
+      open.push(ni, ng + h(nx, ny));
+    });
+  }
+  return null;
+}
+
+/** Клетки, из которых можно взаимодействовать с (x,y). */
+function accessCells(world, x, y, includeSelf = true) {
+  const out = new Set();
+  const add = (ax, ay) => {
+    if (!world.inside(ax, ay)) return;
+    if (world.standable(ax, ay) || world.climbable(ax, ay)) out.add(ay * W + ax);
+  };
+  if (includeSelf) add(x, y);
+  add(x - 1, y); add(x + 1, y); add(x, y - 1); add(x, y + 1);
+  add(x - 1, y - 1); add(x + 1, y - 1); add(x - 1, y + 1); add(x + 1, y + 1);
+  return out;
+}
+
+// ===== network.js ==================================================
+// Сети: электропроводка, трубы для жидкости и газа.
+// Каждая сеть — связная группа проводов/труб; машины подключаются
+// через собственный тайл или соседний по стороне.
+
+const KINDS = ['power', 'liquid', 'gas', 'auto'];
+
+class Networks {
+  constructor() {
+    this.map = {};
+    this.nets = {};
+    for (const k of KINDS) { this.map[k] = new Int32Array(W * H).fill(-1); this.nets[k] = []; }
+  }
+
+  rebuild(world) {
+    for (const k of KINDS) { this.map[k].fill(-1); this.nets[k] = []; }
+    const stack = [];
+    for (const [, st] of world.bdata) {
+      if (!st.built || !st.def.conduit) continue;
+      const kind = st.def.conduit;
+      const i = st.y * W + st.x;
+      if (this.map[kind][i] >= 0) continue;
+      const net = this.newNet(kind);
+      const id = this.nets[kind].length - 1;
+      stack.length = 0; stack.push(i);
+      this.map[kind][i] = id;
+      while (stack.length) {
+        const c = stack.pop();
+        net.tiles++;
+        const x = c % W, y = (c / W) | 0;
+        for (const n of [c - 1, c + 1, c - W, c + W]) {
+          if (n < 0 || n >= W * H) continue;
+          if (Math.abs((n % W) - x) > 1) continue;
+          if (this.map[kind][n] >= 0) continue;
+          if (!world.cond[kind][n]) continue;
+          const s2 = world.bdata.get(n * 8 + LAYER[kind]);
+          if (!s2 || !s2.built) continue;
+          this.map[kind][n] = id; stack.push(n);
+        }
+      }
+      net.cap = net.tiles * (kind === 'liquid' ? 10 : kind === 'gas' ? 1 : 0);
+      net.wattCap = kind === 'power' ? 1000 : 0;   // предел обычного провода
+    }
+
+    // подключение машин
+    for (const [, st] of world.bdata) {
+      st.net = { power: -1, liquid: -1, gas: -1, auto: -1 };
+      if (!st.built || !st.def.net) continue;
+      const i = st.y * W + st.x;
+      for (const kind of KINDS) {
+        if (!st.def.net[kind]) continue;
+        for (const n of [i, i - 1, i + 1, i - W, i + W]) {
+          if (n < 0 || n >= W * H) continue;
+          const id = this.map[kind][n];
+          if (id >= 0) { st.net[kind] = id; this.nets[kind][id].machines.push(st); break; }
+        }
+      }
+    }
+    world.netDirty = false;
+  }
+
+  newNet(kind) {
+    const net = { kind, tiles: 0, cap: 0, machines: [], gen: 0, demand: 0, consumed: 0, stored: 0, storeCap: 0, buffer: {} };
+    this.nets[kind].push(net);
+    return net;
+  }
+
+  net(kind, id) { return id >= 0 ? this.nets[kind][id] : null; }
+
+  /** Жидкость/газ в сети: сколько всего килограммов. */
+  static amount(net) {
+    if (!net) return 0;
+    let s = 0;
+    for (const v of Object.values(net.buffer)) s += v;
+    return s;
+  }
+
+  /** Добавить вещество в сеть, вернуть, сколько влезло. */
+  static push(net, res, amt) {
+    if (!net || amt <= 0) return 0;
+    const room = net.cap - Networks.amount(net);
+    const put = Math.min(room, amt);
+    if (put <= 0) return 0;
+    net.buffer[res] = (net.buffer[res] || 0) + put;
+    return put;
+  }
+
+  /** Забрать вещество (или любое, если res === null). */
+  static pull(net, res, amt) {
+    if (!net || amt <= 0) return null;
+    if (res) {
+      const have = net.buffer[res] || 0;
+      const got = Math.min(have, amt);
+      if (got <= 0) return null;
+      net.buffer[res] -= got;
+      return { res, amt: got };
+    }
+    for (const [k, v] of Object.entries(net.buffer)) {
+      if (v <= 0) continue;
+      const got = Math.min(v, amt);
+      net.buffer[k] -= got;
+      return { res: k, amt: got };
+    }
+    return null;
+  }
+}
+
+// ===== research.js =================================================
+// Дерево исследований: открывает постройки, изучается в лаборатории.
+const TECHS = [
+  { key: 'power1', name: 'Энергетика',   cost: 120, req: [],          unlock: ['coalgen', 'lamp'],                     desc: 'Угольный генератор и освещение' },
+  { key: 'air1',   name: 'Вентиляция',   cost: 180, req: ['power1'],  unlock: ['gpipe', 'gpump', 'gvent', 'skimmer', 'electro'], desc: 'Газовые трубы, насосы, электролизёр' },
+  { key: 'plumb1', name: 'Сантехника',   cost: 180, req: ['power1'],  unlock: ['lpipe', 'lpump', 'lvent', 'sieve', 'shower'],    desc: 'Водопровод и очистка воды' },
+  { key: 'food1',  name: 'Агрономика',   cost: 150, req: [],          unlock: ['grill', 'ration', 'compost'],          desc: 'Кухня, холодильник, компост' },
+  { key: 'med1',   name: 'Медицина',     cost: 240, req: ['food1'],   unlock: ['medcot'],                              desc: 'Медкойка и лечение болезней' },
+  { key: 'rec1',   name: 'Досуг',        cost: 220, req: ['power1'],  unlock: ['arcade'],                              desc: 'Развлечения снижают стресс' },
+  { key: 'auto1',  name: 'Автоматика',   cost: 260, req: ['power1'],  unlock: ['awire', 'tsensor', 'psensor', 'wsensor', 'switch'], desc: 'Датчики и логические провода' },
+  { key: 'ranch1', name: 'Ранчо',        cost: 260, req: ['food1'],   unlock: ['feeder'],                              desc: 'Приручение хатчей' },
+];
+
+class Research {
+  constructor(game) {
+    this.game = game;
+    this.done = new Set();
+    this.current = null;
+    this.progress = 0;
+  }
+
+  available() {
+    return TECHS.filter(t => !this.done.has(t.key) && t.req.every(r => this.done.has(r)));
+  }
+
+  select(key) {
+    const t = TECHS.find(x => x.key === key);
+    if (!t || this.done.has(key)) return;
+    if (this.current?.key !== key) this.progress = 0;
+    this.current = t;
+  }
+
+  /** true — тема завершена (работа оператора окончена). */
+  check() {
+    if (!this.current) return true;
+    if (this.progress < this.current.cost) return false;
+    this.done.add(this.current.key);
+    this.game.alert(`Исследовано: ${this.current.name}!`, true);
+    for (const p of this.game.pawns) p.remember('newTech');
+    this.current = null;
+    this.progress = 0;
+    return true;
+  }
+
+  unlocked(def) { return !def.tech || this.done.has(def.tech); }
+}
+
+// ===== schedule.js =================================================
+// Расписание колонии: цикл делится на 12 отрезков со своим режимом.
+const BLOCKS = {
+  work:  { name: 'Работа',  color: '#ffb43d', icon: '⛏' },
+  rec:   { name: 'Досуг',   color: '#c58ae0', icon: '🕹' },
+  bath:  { name: 'Гигиена', color: '#7ec8c8', icon: '🚿' },
+  sleep: { name: 'Сон',     color: '#5a7fd6', icon: '💤' },
+};
+
+class Schedule {
+  constructor() {
+    this.slots = ['work', 'work', 'work', 'work', 'work', 'work', 'work', 'work',
+      'bath', 'rec', 'sleep', 'sleep'];
+  }
+  at(cycleT) { return this.slots[Math.min(11, Math.floor(cycleT * 12))]; }
+  cycle(idx) {
+    const keys = Object.keys(BLOCKS);
+    this.slots[idx] = keys[(keys.indexOf(this.slots[idx]) + 1) % keys.length];
+  }
+}
+
+// ===== social.js ===================================================
+// Психология и социум: мнения друг о друге, разговоры, ссоры, воспоминания.
+const CHAT_RANGE = 3;
+
+const THOUGHTS = {
+  chat:       { text: 'Приятная беседа',      value: +6,  dur: 240 },
+  argue:      { text: 'Поссорился',           value: -10, dur: 300 },
+  friendDied: { text: 'Погиб друг',           value: -30, dur: 900 },
+  ateGood:    { text: 'Вкусно поел',          value: +8,  dur: 200 },
+  ateSame:    { text: 'Надоела одна и та же еда', value: -6, dur: 300 },
+  slept:      { text: 'Выспался',             value: +6,  dur: 200 },
+  sleptFloor: { text: 'Спал на полу',         value: -8,  dur: 300 },
+  newTech:    { text: 'Прорыв в науке',       value: +6,  dur: 300 },
+  scalded:    { text: 'Ошпарился',            value: -12, dur: 240 },
+  fell:       { text: 'Больно упал',          value: -8,  dur: 200 },
+};
+
+/** Разговоры и отношения: раз в несколько секунд ищем соседей. */
+function stepSocial(game, dt) {
+  const pawns = game.pawns;
+  for (let a = 0; a < pawns.length; a++) {
+    for (let b = a + 1; b < pawns.length; b++) {
+      const p = pawns[a], q = pawns[b];
+      if (Math.abs(p.x - q.x) + Math.abs(p.y - q.y) > CHAT_RANGE) continue;
+      if (p.task === 'sleep' || q.task === 'sleep') continue;
+      if (Math.random() > 0.35 * dt) continue;
+
+      const chemistry = (p.mood + q.mood) / 2 - 45 + (p.opinion(q) + q.opinion(p)) / 4;
+      const good = chemistry + (Math.random() - 0.5) * 40 > 0;
+      const delta = good ? 4 + Math.random() * 4 : -(4 + Math.random() * 6);
+      p.addOpinion(q, delta); q.addOpinion(p, delta);
+      p.remember(good ? 'chat' : 'argue'); q.remember(good ? 'chat' : 'argue');
+      if (!good && Math.abs(delta) > 8) {
+        p.stress = Math.min(100, p.stress + 6);
+        q.stress = Math.min(100, q.stress + 6);
+      }
+    }
+  }
+}
+
+function relationLabel(v) {
+  if (v > 60) return 'лучший друг';
+  if (v > 25) return 'друг';
+  if (v > -10) return 'знакомый';
+  if (v > -45) return 'неприязнь';
+  return 'враг';
+}
+
+// ===== rooms.js ====================================================
+// Комнаты: замкнутые помещения дают бонусы к настроению, как в ONI.
+
+const MAX_ROOM = 120;
+
+const ROOM_TYPES = [
+  { key: 'bedroom', name: 'Спальня',  need: st => st.def.sleep,  bonus: 8 },
+  { key: 'mess',    name: 'Столовая', need: st => st.def.eat,    bonus: 6 },
+  { key: 'latrine', name: 'Санузел',  need: st => st.def.toilet, bonus: 4 },
+  { key: 'rec',     name: 'Зона отдыха', need: st => st.def.fun, bonus: 6 },
+  { key: 'lab',     name: 'Лаборатория', need: st => st.def.manualWork === 'research', bonus: 3 },
+];
+
+/** Найти замкнутые помещения и приписать их постройкам. */
+function findRooms(world) {
+  const seen = new Uint8Array(W * H);
+  const rooms = [];
+  for (const [, st] of world.bdata) {
+    if (!st.built || st.def.conduit) continue;
+    const start = st.y * W + st.x;
+    if (seen[start]) continue;
+    const tiles = [];
+    const stack = [start];
+    seen[start] = 1;
+    let sealed = true;
+    while (stack.length) {
+      const c = stack.pop();
+      tiles.push(c);
+      if (tiles.length > MAX_ROOM) { sealed = false; break; }
+      const cx = c % W, cy = (c / W) | 0;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = cx + dx, ny = cy + dy;
+        if (nx < 1 || ny < 1 || nx >= W - 1 || ny >= H - 1) { sealed = false; continue; }
+        const n = ny * W + nx;
+        if (world.gasBlocked(n)) continue;       // стена, плитка или дверь — граница
+        if (seen[n]) continue;
+        seen[n] = 1; stack.push(n);
+      }
+    }
+    if (!sealed) continue;
+    const set = new Set(tiles);
+    const inside = [];
+    for (const [, s2] of world.bdata) if (s2.built && set.has(s2.y * W + s2.x)) inside.push(s2);
+    const type = ROOM_TYPES.find(t => inside.some(t.need));
+    if (!type) continue;
+    const decor = inside.reduce((a, b) => a + (b.def.decor || 0), 0);
+    const room = { type: type.key, name: type.name, bonus: type.bonus + Math.min(8, decor), tiles: set, buildings: inside };
+    for (const s2 of inside) s2.room = room;
+    rooms.push(room);
+  }
+  return rooms;
+}
+
+function roomAt(rooms, x, y) {
+  const i = y * W + x;
+  return rooms.find(r => r.tiles.has(i)) || null;
+}
+
+// ===== critters.js =================================================
+// Живность: хатчи грызут породу и дают уголь, пуфты чистят воздух, паку живут в воде.
+
+const SPECIES = {
+  hatch: {
+    name: 'Хатч', icon: '🐗', color: '#b0784a', habitat: 'ground',
+    eats: ['stone', 'coal', 'copper', 'dirt'], drops: 'coal', dropAmt: 8,
+    meat: 30, eatRate: 6, hungerMax: 1200, breedAt: 900, life: 3000,
+  },
+  puft: {
+    name: 'Пуфт', icon: '🫧', color: '#c9a2d8', habitat: 'air',
+    gas: 'co2', drops: 'slime', dropAmt: 4,
+    meat: 12, eatRate: 0.05, hungerMax: 900, breedAt: 700, life: 2400,
+  },
+  pacu: {
+    name: 'Паку', icon: '🐟', color: '#6fb6c8', habitat: 'water',
+    eats: ['algae'], drops: null, dropAmt: 0,
+    meat: 25, eatRate: 4, hungerMax: 1000, breedAt: 800, life: 2600,
+  },
+};
+
+let CID = 1;
+
+class Critter {
+  constructor(species, x, y) {
+    this.id = CID++;
+    this.sp = species;
+    this.def = SPECIES[species];
+    this.x = x; this.y = y; this.px = x; this.py = y;
+    this.hunger = this.def.hungerMax * 0.6;
+    this.age = 0; this.digest = 0; this.dir = Math.random() < 0.5 ? -1 : 1;
+    this.hunted = false; this.tame = 0; this.dead = false;
+  }
+
+  update(world, game, dt) {
+    this.age += dt;
+    this.hunger -= this.def.eatRate * 0.25 * dt;
+    const i = this.y * W + this.x;
+
+    // среда обитания
+    if (this.def.habitat === 'water' && world.water[i] < 100) { this.health = -1; }
+    if (this.def.habitat === 'ground' && world.water[i] > 500) this.hunger -= 20 * dt;
+
+    // питание
+    if (this.def.gas) {
+      const g = world[this.def.gas];
+      if (g[i] > 0.02) {
+        const eat = Math.min(g[i], this.def.eatRate * dt);
+        g[i] -= eat; this.hunger = Math.min(this.def.hungerMax, this.hunger + eat * 400);
+        world.o2[i] += eat * 0.3;
+        this.digest += eat * 100;
+      }
+    } else {
+      const pile = world.items.get(i);
+      if (pile) {
+        for (const res of this.def.eats) {
+          if (!pile[res]) continue;
+          const eat = world.takeItem(i, res, this.def.eatRate * dt);
+          this.hunger = Math.min(this.def.hungerMax, this.hunger + eat * 20);
+          this.digest += eat;
+          break;
+        }
+      } else if (this.sp === 'hatch' && Math.random() < 0.02 * dt * 60) {
+        // грызёт стену рядом
+        for (const [dx, dy] of [[this.dir, 0], [0, 1]]) {
+          const nx = this.x + dx, ny = this.y + dy;
+          if (world.matAt(nx, ny) && world.matAt(nx, ny) !== 8 && world.mine(nx, ny, 3)) break;
+        }
+      }
+    }
+
+    // кормушка: прирученные звери едят из неё и дают больше продукта
+    if (!this.def.gas) {
+      for (const [, st] of world.bdata) {
+        if (!st.built || !st.def.feeder) continue;
+        if (Math.abs(st.x - this.x) + Math.abs(st.y - this.y) > 4) continue;
+        const food = st.store[st.def.uses] || 0;
+        if (food <= 0) continue;
+        const eat = Math.min(food, this.def.eatRate * dt);
+        st.store[st.def.uses] -= eat;
+        this.hunger = Math.min(this.def.hungerMax, this.hunger + eat * 25);
+        this.digest += eat * 1.5;
+        this.tame = Math.min(1, this.tame + 0.02 * dt);
+        break;
+      }
+    }
+
+    // продукт жизнедеятельности
+    if (this.digest > 12) {
+      this.digest = 0;
+      if (this.def.drops) world.addItem(this.x, this.y, this.def.drops, this.def.dropAmt * (1 + this.tame));
+    }
+
+    // размножение
+    if (this.hunger > this.def.breedAt && this.age > 200 && Math.random() < 0.004 * dt) {
+      if (game.critters.length < 40) {
+        game.critters.push(new Critter(this.sp, this.x, this.y));
+        this.hunger *= 0.6;
+      }
+    }
+
+    // смерть
+    if (this.hunger <= 0 || this.age > this.def.life || this.health === -1) {
+      this.dead = true;
+      world.addItem(this.x, this.y, 'food', this.def.meat * 0.5);
+      return;
+    }
+
+    this.move(world, dt);
+  }
+
+  move(world, dt) {
+    const speed = this.def.habitat === 'air' ? 1.2 : this.def.habitat === 'water' ? 1.6 : 1.8;
+    if (Math.random() < 0.6 * dt) this.dir = -this.dir;
+
+    if (this.def.habitat === 'ground') {
+      const nx = this.x + this.dir;
+      if (!world.solid(nx, this.y) && world.standable(nx, this.y)) this.x = nx;
+      else if (!world.solid(nx, this.y - 1) && world.standable(nx, this.y - 1)) { this.x = nx; this.y--; }
+      else this.dir = -this.dir;
+      while (!world.standable(this.x, this.y) && !world.solid(this.x, this.y + 1) && this.y < H - 2) this.y++;
+    } else if (this.def.habitat === 'air') {
+      const nx = this.x + this.dir, ny = this.y + (Math.random() < 0.5 ? -1 : 1);
+      if (!world.solid(nx, this.y)) this.x = nx;
+      if (!world.solid(this.x, ny) && ny > 1 && ny < H - 1) this.y = ny;
+    } else {
+      const nx = this.x + this.dir, ny = this.y + (Math.random() < 0.5 ? -1 : 1);
+      if (world.water[this.y * W + nx] > 200 && !world.solid(nx, this.y)) this.x = nx;
+      if (world.water[ny * W + this.x] > 200 && !world.solid(this.x, ny)) this.y = ny;
+    }
+    this.px += (this.x - this.px) * Math.min(1, dt * 6);
+    this.py += (this.y - this.py) * Math.min(1, dt * 6);
+  }
+}
+
+/** Заселение мира при генерации. */
+function populate(world, rng) {
+  const out = [];
+  const tryPlace = (sp, cond) => {
+    for (let t = 0; t < 600; t++) {
+      const x = 2 + Math.floor(rng() * (W - 4));
+      const y = Math.floor(H * 0.25 + rng() * H * 0.7);
+      const i = y * W + x;
+      if (world.mat[i]) continue;
+      if (!cond(world, x, y, i)) continue;
+      out.push(new Critter(sp, x, y));
+      return true;
+    }
+    return false;
+  };
+  for (let n = 0; n < 8; n++) tryPlace('hatch', (w, x, y) => w.standable(x, y) && w.water[y * W + x] < 50);
+  for (let n = 0; n < 5; n++) tryPlace('puft', (w, x, y, i) => w.co2[i] > 0.05 && w.water[i] < 20);
+  for (let n = 0; n < 6; n++) tryPlace('pacu', (w, x, y, i) => w.water[i] > 500);
+  return out;
+}
+
+// ===== jobs.js =====================================================
+// Биржа работ: приказы копать/строить/таскать/собирать урожай/крутить генератор.
+
+
+
+const PLANT_NEEDS = Object.fromEntries(Object.entries(PLANTS).map(([k, p]) => [k, p.needs]));
+const PLANT_WATER = Object.fromEntries(Object.entries(PLANTS).map(([k, p]) => [k, p.water > 0]));
+
+const JOB_ORDER = ['operate', 'hunt', 'cook', 'research', 'supply', 'build', 'dig', 'harvest', 'deconstruct', 'haul'];
+
+/** Нужен ли оператор станку (кухня, лаборатория). */
+function needsOperator(st, game) {
+  if (st.def.manualWork === 'cook') return (st.store.food || 0) >= 5 && (st.store.meal || 0) < 40;
+  if (st.def.manualWork === 'research') return !!game.research && !!game.research.current;
+  return false;
+}
+const JOB_LABEL = {
+  operate: 'Генератор', supply: 'Подвоз', build: 'Стройка', dig: 'Копает',
+  harvest: 'Урожай', deconstruct: 'Разбор', haul: 'Переноска',
+  hunt: 'Охотится', eat: 'Ест', sleep: 'Спит', breathe: 'Задыхается', idle: 'Без дела', walk: 'Идёт',
+  cook: 'Готовит', research: 'Изучает', toilet: 'В уборной', wash: 'Моется', heal: 'Лечится', fun: 'Отдыхает',
+};
+
+class JobBoard {
+  constructor() { this.jobs = []; this.claimed = new Map(); this.bad = new Map(); }
+
+  /** Временно отложить невыполнимую задачу, чтобы не зацикливаться на ней. */
+  postpone(job, until) { if (job) this.bad.set(job.key, until); }
+
+  clearClaims(pawn) {
+    for (const [job, owner] of this.claimed) if (owner === pawn) this.claimed.delete(job);
+  }
+
+  rebuild(world, game) {
+    const jobs = [];
+    const { mat, dig, bdata, items } = world;
+
+    // 1. добыча
+    for (let i = 0; i < dig.length; i++) {
+      if (dig[i] && mat[i]) jobs.push({ type: 'dig', x: i % W, y: (i / W) | 0, key: 'dig' + i });
+    }
+
+    // 2. стройплощадки: подвоз материалов, затем работа
+    for (const [k, st] of bdata) {
+      const x = st.x, y = st.y;
+      if (st.remove) { jobs.push({ type: 'deconstruct', x, y, k, key: 'dec' + k }); continue; }
+      if (st.built) {
+        if (st.def.farm && st.growth >= 1) jobs.push({ type: 'harvest', x, y, k, key: 'hv' + k });
+        if (st.def.uses && (st.store[st.def.uses] || 0) < 20)
+          jobs.push({ type: 'supply', x, y, k, res: st.def.uses, amount: 20, key: 'sup' + k });
+        if (st.def.farm) {
+          const want = st.plant ? Object.keys(PLANT_NEEDS[st.plant] || { dirt: 1 })[0] : 'dirt';
+          if ((st.store[want] || 0) < 10) jobs.push({ type: 'supply', x, y, k, res: want, amount: 10, key: 'farm' + k });
+          if (st.plant && PLANT_WATER[st.plant] && (st.store.water || 0) < 5 && st.net?.liquid === -1)
+            jobs.push({ type: 'supply', x, y, k, res: 'ice', amount: 10, key: 'fw' + k });
+        }
+        if (st.def.manual && game.power.deficit > 0)
+          jobs.push({ type: 'operate', x, y, k, key: 'op' + k });
+        if (st.def.manualWork === 'cook' && (st.store.food || 0) < 40)
+          jobs.push({ type: 'supply', x, y, k, res: 'food', amount: 40, key: 'sfood' + k });
+        if (st.def.manualWork && st.powered !== false && needsOperator(st, game))
+          jobs.push({ type: st.def.manualWork, x, y, k, key: 'mw' + k });
+        continue;
+      }
+      let missing = null;
+      for (const [res, amt] of Object.entries(st.def.cost)) {
+        const have = st.delivered?.[res] || 0;
+        if (have < amt) { missing = { res, amount: amt - have }; break; }
+      }
+      if (missing) jobs.push({ type: 'supply', x, y, k, res: missing.res, amount: missing.amount, key: 'sup' + k, site: true });
+      else jobs.push({ type: 'build', x, y, k, key: 'bld' + k });
+    }
+
+    // 2.5 охота
+    for (const c of game.critters || []) {
+      if (c.hunted && !c.dead) jobs.push({ type: 'hunt', x: c.x, y: c.y, cid: c.id, key: 'hunt' + c.id });
+    }
+
+    // 3. переноска: кучи на полу → склад
+    for (const [i, pile] of items) {
+      const x = i % W, y = (i / W) | 0;
+      for (const [res, amt] of Object.entries(pile)) {
+        if (amt < 0.5) continue;
+        jobs.push({ type: 'haul', x, y, res, amount: amt, key: 'h' + i + res });
+      }
+    }
+
+    this.jobs = jobs;
+    const live = new Set(jobs.map(j => j.key));
+    for (const key of [...this.claimed.keys()]) if (!live.has(key)) this.claimed.delete(key);
+  }
+
+  /** Подобрать задачу для дупликанта: ближайшая доступная с учётом приоритетов. */
+  assign(world, pawn, game) {
+    const cands = this.jobs
+      .filter(j => {
+        const owner = this.claimed.get(j.key);
+        if (owner && owner !== pawn) return false;
+        const bad = this.bad.get(j.key);
+        if (bad !== undefined) { if (bad > game.time) return false; this.bad.delete(j.key); }
+        if (pawn.prioOf(j.type) <= 0) return false;
+        if (!stillValid(world, j)) return false;
+        if (j.type === 'haul' && !storageFor(world, j.res)) return false;
+        if ((j.type === 'supply' || j.type === 'build') && !supplyReady(world, j)) return false;
+        return true;
+      })
+      .map(j => ({
+        j,
+        rank: JOB_ORDER.indexOf(j.type) - pawn.prioOf(j.type) * 3,
+        d: Math.abs(j.x - pawn.x) + Math.abs(j.y - pawn.y),
+      }))
+      .sort((a, b) => (a.rank - b.rank) || (a.d - b.d))
+      .slice(0, 14);
+
+    for (const { j } of cands) {
+      const goals = accessCells(world, j.x, j.y, j.type !== 'dig');
+      const path = findPath(world, pawn.x, pawn.y, goals);
+      if (!path) continue;
+      this.claimed.set(j.key, pawn);
+      return { job: j, path };
+    }
+    return null;
+  }
+}
+
+/** Проверка задачи по актуальному состоянию мира (список работ обновляется не каждый кадр). */
+function stillValid(world, j) {
+  const i = j.y * W + j.x;
+  const st = j.k !== undefined ? world.bdata.get(j.k) : null;
+  switch (j.type) {
+    case 'dig': return !!world.mat[i] && !!world.dig[i];
+    case 'haul': return (world.items.get(i)?.[j.res] || 0) > 0.4;
+    case 'build': return !!st && !st.built && !st.remove;
+    case 'deconstruct': return !!st && !!st.remove;
+    case 'harvest': return !!st && st.built && st.growth >= 1;
+    case 'operate': return !!st && st.built;
+    case 'cook': return !!st && st.built && (st.store.food || 0) >= 5;
+    case 'research': return !!st && st.built;
+    case 'supply': {
+      if (!st) return false;
+      if (!st.built) {
+        if (j.site === undefined && !st.def.uses && !st.def.farm) return false;
+        const need = st.def.cost[j.res] || 0;
+        return (st.delivered?.[j.res] || 0) + 0.01 < need;
+      }
+      if (st.def.uses === j.res) return (st.store[j.res] || 0) < 20;
+      if (st.def.manualWork === 'cook' && j.res === 'food') return (st.store.food || 0) < 40;
+      if (st.def.farm) return (st.store[j.res] || 0) < 10;
+      return false;
+    }
+    case 'hunt': return true;
+    default: return true;
+  }
+}
+
+/** Есть ли где хранить ресурс. */
+function storageFor(world, res) {
+  const kind = storageKind(res);
+  for (const [i, st] of world.bdata) {
+    if (!st.built || st.def.store !== kind) continue;
+    const used = Object.values(st.store).reduce((a, b) => a + b, 0);
+    if (used < st.def.cap) return st;
+  }
+  return null;
+}
+
+/** Есть ли откуда взять ресурс для подвоза. */
+function supplyReady(world, job) {
+  if (job.type === 'build') return true;
+  return !!findResource(world, job.res);
+}
+
+function storageKind(res) { return res === 'food' || res === 'meal' ? 'food' : 'mat'; }
+
+/** Источники ресурса, отсортированные по удалённости: склады и кучи на полу. */
+function findResources(world, res, near, limit = 8) {
+  const out = [];
+  for (const [, st] of world.bdata) {
+    if (!st.built || !st.store[res] || st.store[res] < 0.5) continue;
+    out.push({ x: st.x, y: st.y, from: st });
+  }
+  for (const [i, pile] of world.items) {
+    if (!pile[res] || pile[res] < 0.5) continue;
+    out.push({ x: i % W, y: (i / W) | 0, pileIdx: i });
+  }
+  if (near) out.sort((a, b) =>
+    (Math.abs(a.x - near.x) + Math.abs(a.y - near.y)) - (Math.abs(b.x - near.x) + Math.abs(b.y - near.y)));
+  return out.slice(0, limit);
+}
+
+/** Ближайший источник ресурса (без проверки достижимости). */
+function findResource(world, res, near) {
+  return findResources(world, res, near, 1)[0] || null;
+}
+
+/** Ближайший достижимый источник — с проверкой пути. */
+function reachableResource(world, res, pawn) {
+  for (const src of findResources(world, res, pawn)) {
+    const path = findPath(world, pawn.x, pawn.y, accessCells(world, src.x, src.y));
+    if (path) return { src, path };
+  }
+  return null;
+}
+
+/** Ближайший достижимый склад для ресурса. */
+function reachableStorage(world, res, pawn) {
+  const kind = res === 'food' || res === 'meal' ? 'food' : 'mat';
+  const bins = [];
+  for (const [, st] of world.bdata) {
+    if (!st.built || st.def.store !== kind) continue;
+    const used = Object.values(st.store).reduce((a, b) => a + b, 0);
+    if (used < st.def.cap) bins.push(st);
+  }
+  bins.sort((a, b) => (Math.abs(a.x - pawn.x) + Math.abs(a.y - pawn.y)) - (Math.abs(b.x - pawn.x) + Math.abs(b.y - pawn.y)));
+  for (const bin of bins.slice(0, 6)) {
+    const path = findPath(world, pawn.x, pawn.y, accessCells(world, bin.x, bin.y));
+    if (path) return { bin, path };
+  }
+  return null;
+}
+
+/** Сколько всего ресурса на складах и на полу. */
+function countResource(world, res) {
+  let n = 0;
+  for (const [, st] of world.bdata) if (st.built && st.store[res]) n += st.store[res];
+  for (const [, pile] of world.items) if (pile[res]) n += pile[res];
+  return n;
+}
+
+function buildingCostText(def) {
+  return Object.entries(def.cost).map(([r, a]) => `${a} ${r}`).join(', ');
+}
+
+// ===== machines.js =================================================
+// Поведение машин: энергия по сетям, насосы, электролиз, очистка, генераторы.
+
+
+
+const GAS_KEYS = ['o2', 'co2', 'steam', 'h2'];
+
+/** Энергия считается отдельно для каждой электросети. */
+function updatePower(world, nets, dt, totals) {
+  totals.gen = 0; totals.demand = 0; totals.stored = 0; totals.cap = 0; totals.deficit = 0;
+
+  // машины без сети остаются обесточенными
+  for (const [, st] of world.bdata) if (st.built && st.def.power < 0) st.powered = false;
+  if (world.netDirty) return;
+
+  for (const net of nets.nets.power) {
+    let gen = 0, demand = 0, stored = 0, cap = 0;
+    const consumers = [], batteries = [];
+    for (const st of net.machines) {
+      const d = st.def;
+      if (d.storeJ) { batteries.push(st); stored += st.charge; cap += d.storeJ; }
+      if (d.power > 0) {
+        if (d.manual) {
+          st.operating = Math.max(0, (st.operating || 0) - dt);
+          if (st.operating > 0) gen += d.power;
+        } else if (d.uses) {
+          const fuel = st.store[d.uses] || 0;
+          st.burning = fuel > 0;
+          if (st.burning) { st.store[d.uses] = Math.max(0, fuel - 0.12 * dt); gen += d.power; }
+        } else gen += d.power;
+      } else if (d.power < 0) { demand += -d.power; consumers.push(st); }
+    }
+    const fromBatteries = dt > 0 ? stored / dt : 0;
+    let budget = gen + fromBatteries, consumed = 0;
+    for (const st of consumers) {
+      const p = -st.def.power;
+      if (budget >= p) { st.powered = true; budget -= p; consumed += p; } else st.powered = false;
+    }
+    let rest = Math.abs((gen - consumed) * dt);
+    const charging = gen >= consumed;
+    for (const st of batteries) {
+      if (rest <= 0) break;
+      if (charging) { const put = Math.min(st.def.storeJ - st.charge, rest); st.charge += put; rest -= put; }
+      else { const take = Math.min(st.charge, rest); st.charge -= take; rest -= take; }
+    }
+    // перегрузка: если сеть тянет больше предела, провод перегорает
+    if (net.wattCap && consumed > net.wattCap) {
+      net.overload = (net.overload || 0) + dt;
+      if (net.overload > 4) {
+        net.overload = 0;
+        const wires = [];
+        for (let i = 0; i < world.cond.power.length; i++) if (nets.map.power[i] === nets.nets.power.indexOf(net)) wires.push(i);
+        const victim = wires[Math.floor(Math.random() * wires.length)];
+        if (victim !== undefined) {
+          world.removeBuilding(victim % W, (victim / W) | 0, 1);
+          totals.burned = (totals.burned || 0) + 1;
+        }
+      }
+    } else net.overload = 0;
+
+    net.gen = gen; net.demand = demand; net.consumed = consumed;
+    net.stored = batteries.reduce((a, b) => a + b.charge, 0); net.storeCap = cap;
+    totals.gen += gen; totals.demand += demand; totals.stored += net.stored; totals.cap += cap;
+    if (demand > gen && net.stored <= 0) totals.deficit += demand - gen;
+  }
+}
+
+/** Датчики и логические сети: сигнал включает/выключает машины. */
+function updateAutomation(world, nets, dt) {
+  for (const net of nets.nets.auto) net.signal = false;
+  for (const [, st] of world.bdata) {
+    if (!st.built || !st.def.sensor) continue;
+    const i = st.y * W + st.x;
+    const d = st.def;
+    let v = 0;
+    if (d.sensor === 'temp') v = world.temp[i];
+    else if (d.sensor === 'gas') v = world.o2[i] + world.co2[i] + world.steam[i] + world.h2[i];
+    else if (d.sensor === 'water') v = world.water[i];
+    const thr = st.threshold ?? d.threshold;
+    const above = st.above ?? d.above;
+    st.signal = d.sensor === 'manual' ? (st.on !== false) : (above ? v > thr : v < thr);
+    const net = nets.net('auto', st.net?.auto ?? -1);
+    if (net && st.signal) net.signal = true;
+  }
+  for (const [, st] of world.bdata) {
+    if (!st.built || !st.def.auto) continue;
+    const id = st.net?.auto ?? -1;
+    st.autoOff = id >= 0 && !nets.net('auto', id).signal;
+  }
+}
+
+/** Работа устройств: газ, вода, тепло, топливо. */
+function updateMachines(world, nets, game, dt) {
+  for (const [, st] of world.bdata) {
+    if (!st.built) continue;
+    const d = st.def, x = st.x, y = st.y, i = y * W + x;
+    if (st.autoOff) { if (d.power < 0) st.powered = false; continue; }
+    const liq = nets.net('liquid', st.net?.liquid ?? -1);
+    const gas = nets.net('gas', st.net?.gas ?? -1);
+
+    switch (d.key) {
+      case 'diffuser': {
+        if (!st.powered) break;
+        const use = 0.06 * dt;
+        if ((st.store.algae || 0) > use) {
+          st.store.algae -= use;
+          world.o2[i] += use * 12;
+          world.temp[i] += 0.4 * dt;
+        }
+        break;
+      }
+      case 'skimmer': {
+        if (!st.powered) break;
+        const got = liq ? Networks.pull(liq, 'water', 0.03 * dt) : null;
+        if (!got && liq) break;
+        for (const j of [i, i - 1, i + 1, i - W, i + W]) {
+          if (j < 0 || j >= world.co2.length || world.gasBlocked(j)) continue;
+          world.co2[j] = Math.max(0, world.co2[j] - 0.05 * dt);
+        }
+        if (got) { world.water[i] += got.amt; world.pwater[i] = 1; }
+        world.temp[i] += 0.3 * dt;
+        break;
+      }
+      case 'coalgen': {
+        if (st.burning) { world.co2[i] += 0.02 * dt; world.temp[i] += 2.5 * dt; }
+        break;
+      }
+      case 'lpump': {
+        if (!st.powered || !liq) break;
+        const src = [i, i + W].find(j => world.water[j] > 1);
+        if (src === undefined) break;
+        const take = Math.min(world.water[src], 10 * dt);
+        const dirty = world.pwater[src] > 0.4;
+        const moved = Networks.push(liq, dirty ? 'pwater' : 'water', take);
+        world.water[src] -= moved;
+        if (world.water[src] < 0.01) { world.water[src] = 0; world.pwater[src] = 0; }
+        break;
+      }
+      case 'lvent': {
+        if (!liq) break;
+        const got = Networks.pull(liq, null, 10 * dt);
+        if (!got) break;
+        world.water[i] += got.amt;
+        if (got.res === 'pwater') world.pwater[i] = Math.min(1, world.pwater[i] + got.amt / LIQ_FULL);
+        break;
+      }
+      case 'gpump': {
+        if (!st.powered || !gas) break;
+        for (const g of GAS_KEYS) {
+          if (world[g][i] <= 0.005) continue;
+          const take = Math.min(world[g][i], 0.5 * dt);
+          const moved = Networks.push(gas, g, take);
+          world[g][i] -= moved;
+        }
+        break;
+      }
+      case 'gvent': {
+        if (!gas) break;
+        const got = Networks.pull(gas, null, 0.5 * dt);
+        if (got) world[got.res][i] += got.amt;
+        break;
+      }
+      case 'electro': {
+        if (!st.powered || !liq) break;
+        const got = Networks.pull(liq, 'water', 1.0 * dt);
+        if (!got) break;
+        world.o2[i] += got.amt * 0.888;
+        world.h2[i] += got.amt * 0.112;
+        world.temp[i] += 1.5 * dt;
+        break;
+      }
+      case 'sieve': {
+        if (!st.powered || !liq) break;
+        if ((st.store.stone || 0) < 0.02) break;
+        const got = Networks.pull(liq, 'pwater', 5 * dt);
+        if (!got) break;
+        st.store.stone -= got.amt * 0.004;
+        Networks.push(liq, 'water', got.amt);
+        world.temp[i] += 0.1 * dt;
+        break;
+      }
+      case 'compost': {
+        const have = st.store.pdirt || 0;
+        if (have <= 0) break;
+        const conv = Math.min(have, 0.05 * dt);
+        st.store.pdirt -= conv;
+        st.store.dirt = (st.store.dirt || 0) + conv;
+        world.temp[i] += 0.2 * dt;
+        if ((st.store.dirt || 0) > 25) { world.addItem(x, y, 'dirt', st.store.dirt); st.store.dirt = 0; }
+        break;
+      }
+      case 'suitdock': {
+        // док набирает кислород из газовой сети или из воздуха вокруг
+        if (!st.powered) break;
+        const want = 40 - (st.store.o2 || 0);
+        if (want > 0) {
+          const got = gas ? Networks.pull(gas, 'o2', 1 * dt) : null;
+          if (got) st.store.o2 = (st.store.o2 || 0) + got.amt;
+          else if (world.o2[i] > 0.4) {
+            const take = Math.min(world.o2[i] - 0.4, 0.5 * dt);
+            world.o2[i] -= take; st.store.o2 = (st.store.o2 || 0) + take;
+          }
+        }
+        break;
+      }
+      case 'ration': {
+        st.chilled = st.powered;
+        break;
+      }
+      case 'shower': case 'basin': {
+        if (d.net?.liquid && liq && (st.store.water || 0) < 20) {
+          const got = Networks.pull(liq, 'water', 5 * dt);
+          if (got) st.store.water = (st.store.water || 0) + got.amt;
+        }
+        break;
+      }
+    }
+
+    if (d.light) st.lit = st.powered;
+  }
+}
+
+// ===== pawn.js =====================================================
+// Дупликант: потребности, характер, навыки и исполнение задач.
+
+
+
+
+
+
+const TRAITS = [
+  { key: 'strong',   name: 'Силач',        desc: '+40% к копанию',            mod: p => p.skills.dig += 0.4 },
+  { key: 'builder',  name: 'Мастеровой',   desc: '+40% к строительству',      mod: p => p.skills.build += 0.4 },
+  { key: 'green',    name: 'Агроном',      desc: '+50% к фермерству',         mod: p => p.skills.farm += 0.5 },
+  { key: 'fast',     name: 'Быстрые ноги', desc: '+30% к скорости',           mod: p => p.speed *= 1.3 },
+  { key: 'lungs',    name: 'Ёмкие лёгкие', desc: 'дольше держится без O₂',    mod: p => p.lungs = 2.0 },
+  { key: 'glutton',  name: 'Обжора',       desc: 'ест на 40% больше',         mod: p => p.appetite = 1.4 },
+  { key: 'nervous',  name: 'Нервный',      desc: 'стресс растёт быстрее',     mod: p => p.stressRate = 1.6 },
+  { key: 'calm',     name: 'Хладнокровный',desc: 'стресс растёт медленнее',   mod: p => p.stressRate = 0.55 },
+  { key: 'owl',      name: 'Сова',         desc: 'меньше спит',               mod: p => p.sleepNeed = 0.7 },
+  { key: 'lazy',     name: 'Лентяй',       desc: '-25% ко всей работе',       mod: p => p.workMul = 0.75 },
+];
+
+let UID = 1;
+
+class Pawn {
+  constructor(world, x, y, rng) {
+    this.id = UID++;
+    this.name = randomName(rng);
+    this.x = x; this.y = y;
+    this.px = x; this.py = y;
+    this.path = null; this.plan = []; this.job = null;
+    this.speed = 3.4;            // тайлов/с
+    this.lungs = 1; this.appetite = 1; this.stressRate = 1; this.sleepNeed = 1; this.workMul = 1;
+    this.skills = { dig: 1, build: 1, farm: 1, haul: 1 };
+    this.xp = { dig: 0, build: 0, farm: 0, haul: 0 };
+    this.oxygen = 100; this.calories = 3000; this.stamina = 100; this.stress = 0; this.health = 100;
+    this.bladder = 0; this.hygiene = 100; this.fun = 70;
+    this.germs = { slimelung: 0, food: 0 };
+    this.sick = null;
+    this.suitO2 = 0;      // запас кислорода в скафандре
+    this.memories = [];   // временные впечатления (как мысли в RimWorld)
+    this.rel = new Map(); // мнения о других колонистах
+    this.diet = [];       // что ел в последнее время
+    this.passions = {};   // увлечения: ускоряют рост навыка
+    this.mood = 100; this.moodFactors = [];
+    this.carry = null; this.task = 'idle'; this.facing = 1; this.anim = 0;
+    this.disabled = {};
+    this.prio = {};        // тип работы -> 0 (выкл) … 5 (срочно), по умолчанию 3
+    this.bed = null; this.breaking = false; this.retryAt = 0;
+    this.traits = [];
+    const pool = [...TRAITS];
+    for (let i = 0; i < 2; i++) {
+      const t = pool.splice(Math.floor(rng() * pool.length), 1)[0];
+      this.traits.push(t); t.mod(this);
+    }
+    for (const sk of ['dig', 'build', 'farm', 'haul']) {
+      const r = rng();
+      this.passions[sk] = r > 0.82 ? 2 : r > 0.62 ? 1 : 0;   // 2 — страсть, 1 — интерес
+    }
+    this.color = `hsl(${Math.floor(rng() * 360)},55%,62%)`;
+  }
+
+  get idx() { return this.y * W + this.x; }
+  get maxCalories() { return 4000; }
+
+  // ------------------------------------------------------------- потребности
+  updateNeeds(world, game, dt) {
+    const i = this.idx;
+    // дышим на уровне головы, а выдыхаем CO₂ вниз — он тяжелее
+    const head = world.inside(this.x, this.y - 1) && !world.gasBlocked(i - W) ? i - W : i;
+    const o2 = world.o2[head];
+    const submerged = world.water[i] > 450 || world.water[head] > 450;   // с головой
+    if (submerged) {
+      this.oxygen -= (14 / this.lungs) * dt;          // тонет
+      this.health -= 1.5 * dt;
+    } else if (this.suitO2 > 0 && o2 <= BREATH_MIN) {
+      this.suitO2 = Math.max(0, this.suitO2 - 3 * dt);   // дышим из баллона
+      this.oxygen = Math.min(100, this.oxygen + 20 * dt);
+    } else if (o2 > BREATH_MIN) {
+      world.o2[head] = Math.max(0, o2 - 0.0009 * dt * 60 * 0.2);
+      world.co2[i] += 0.0006 * dt * 60 * 0.2;
+      this.oxygen = Math.min(100, this.oxygen + 25 * dt);
+    } else {
+      this.oxygen -= (8 / this.lungs) * dt;
+    }
+
+    // дозаправка скафандра у дока
+    if (this.suitO2 < 100) {
+      for (const st of world.allAt(this.x, this.y).concat(world.allAt(this.x + 1, this.y), world.allAt(this.x - 1, this.y))) {
+        if (!st.built || !st.def.suit || !st.powered || (st.store.o2 || 0) <= 0.01) continue;
+        const take = Math.min(st.store.o2, 0.02 * dt * 60);
+        st.store.o2 -= take;
+        this.suitO2 = Math.min(100, this.suitO2 + take * 120);
+        break;
+      }
+    }
+
+    // температура: перегрев и переохлаждение
+    const T = world.temp[i];
+    if (T > 40) { this.health -= (T - 40) * 0.05 * dt; if (T > 70) this.remember('scalded'); }
+    if (T < -5) this.health -= (-5 - T) * 0.05 * dt;
+    if (this.health < 100) this.health = Math.min(100, this.health + (this.task === 'sleep' ? 1.2 : 0.35) * dt);
+    this.calories -= (this.task === 'sleep' ? 0.9 : 1.8) * this.appetite * dt;
+    if (this.task === 'sleep') this.stamina = Math.min(100, this.stamina + 0.75 * dt);
+    else this.stamina -= 0.22 / this.sleepNeed * dt;
+
+    this.bladder = Math.min(120, this.bladder + (this.task === 'sleep' ? 0.05 : 0.12) * dt);
+    this.hygiene = Math.max(0, this.hygiene - 0.05 * dt);
+    this.fun = Math.max(0, this.fun - (this.task === 'sleep' ? 0 : 0.07) * dt);
+
+    // микробы: слизь и грязная вода заражают, гигиена защищает
+    const germCell = world.germs[i];
+    if (germCell > 1) {
+      this.germs.slimelung += germCell * 0.0006 * dt * (submerged ? 3 : 1);
+      world.germs[i] = Math.max(0, germCell - 0.02 * dt);
+    }
+    if (world.pwater[i] > 0.4 && world.water[i] > 50) this.germs.food += 0.05 * dt;
+    if (this.hygiene > 70) { this.germs.food *= 1 - 0.04 * dt; this.germs.slimelung *= 1 - 0.02 * dt; }
+    if (!this.sick) {
+      if (this.germs.slimelung > 1) this.sick = { type: 'slimelung', name: 'Слизистая лёгочка', t: 0 };
+      else if (this.germs.food > 1) this.sick = { type: 'food', name: 'Пищевое отравление', t: 0 };
+      if (this.sick) game.alert(`${this.name} заболел: ${this.sick.name}`);
+    } else {
+      this.sick.t += dt;
+      if (this.sick.type === 'slimelung') { this.health -= 0.5 * dt; this.stamina -= 0.1 * dt; }
+      else { this.calories -= 1.2 * dt; this.bladder += 0.25 * dt; }
+      const healRate = this.onMedCot ? 4 : 1;
+      this.germs[this.sick.type] -= 0.012 * healRate * dt;
+      if (this.germs[this.sick.type] <= 0) {
+        this.germs[this.sick.type] = 0;
+        game.alert(`${this.name} выздоровел.`, true);
+        this.sick = null;
+    this.suitO2 = 0;      // запас кислорода в скафандре
+    this.memories = [];   // временные впечатления (как мысли в RimWorld)
+    this.rel = new Map(); // мнения о других колонистах
+    this.diet = [];       // что ел в последнее время
+    this.passions = {};   // увлечения: ускоряют рост навыка
+      }
+    }
+
+    // не дотерпел
+    if (this.bladder >= 120) {
+      this.bladder = 0;
+      world.water[i] += 30; world.pwater[i] = 1; world.germs[i] += 400;
+      this.stress = Math.min(100, this.stress + 20);
+      this.hygiene = Math.max(0, this.hygiene - 50);
+      game.alert(`${this.name} не добежал до уборной...`);
+    }
+
+    this.calories = Math.max(-2000, this.calories);
+    this.stamina = clamp(this.stamina, 0, 100);
+    this.oxygen = clamp(this.oxygen, 0, 100);
+
+    // настроение
+    const f = [];
+    if (this.calories < 800) f.push(['Голод', -25]);
+    else if (this.calories > 3200) f.push(['Сыт', +8]);
+    if (this.oxygen < 60) f.push(['Нехватка кислорода', -20]);
+    if (this.stamina < 20) f.push(['Хочет спать', -15]);
+    if (this.bed) f.push(['Своя койка', +10]);
+    if (world.light[i] > 0.4) f.push(['Светло', +5]); else f.push(['Темнота', -6]);
+    if (world.co2[i] > 0.9) f.push(['Смрад CO₂', -12]);
+    if (world.water[i] > 100) f.push(['Мокрые ноги', -8]);
+    if (T > 35) f.push(['Жарко', -12]); else if (T < 5) f.push(['Холодно', -12]);
+    if (this.health < 60) f.push(['Плохое самочувствие', -15]);
+    if (this.sick) f.push(['Болезнь', -18]);
+    if (this.bladder > 80) f.push(['Хочет в уборную', -10]);
+    if (this.hygiene < 35) f.push(['Грязный', -8]);
+    if (this.fun < 25) f.push(['Скука', -14]); else if (this.fun > 75) f.push(['Отдохнул', +8]);
+    if (game.decor > 0) f.push(['Обжитая база', +Math.min(12, game.decor)]);
+    const room = game.roomOf(this.x, this.y);
+    if (room) f.push([room.name, room.bonus]);
+    // воспоминания и отношения
+    for (const m of this.memories) m.left -= dt;
+    this.memories = this.memories.filter(m => m.left > 0);
+    for (const m of this.memories) f.push([m.text, m.value]);
+    let social = 0;
+    for (const q of game.pawns) {
+      if (q === this) continue;
+      const op = this.opinion(q);
+      if (Math.abs(op) < 20) continue;
+      if (Math.abs(q.x - this.x) + Math.abs(q.y - this.y) < 8) social += op > 0 ? 4 : -4;
+    }
+    if (social) f.push([social > 0 ? 'Рядом друзья' : 'Рядом неприятные люди', Math.max(-12, Math.min(12, social))]);
+
+    this.moodFactors = f;
+    const target = clamp(100 + f.reduce((a, b) => a + b[1], 0), 0, 100);
+    this.mood += (target - this.mood) * Math.min(1, dt * 0.35);
+
+    const stressPush = (this.mood < 45 ? (45 - this.mood) * 0.05 : -3) * this.stressRate;
+    this.stress = clamp(this.stress + stressPush * dt, 0, 100);
+    if (this.stress >= 99 && !this.breaking) {
+      this.breaking = true; this.dropJob(game);
+      const kinds = ['destructive', 'sulk', 'binge'];
+      this.breakKind = kinds[Math.floor(Math.random() * kinds.length)];
+      const what = { destructive: 'крушит постройки', sulk: 'сидит и плачет', binge: 'заедает стресс' }[this.breakKind];
+      game.alert(`${this.name}: нервный срыв — ${what}!`);
+      if (this.breakKind === 'destructive') {
+        const near = [...world.bdata.values()].filter(st => st.built && !st.def.conduit
+          && Math.abs(st.x - this.x) + Math.abs(st.y - this.y) < 6);
+        const victim = near[Math.floor(Math.random() * near.length)];
+        if (victim) world.removeBuilding(victim.x, victim.y, victim.layer);
+      }
+      if (this.breakKind === 'binge') this.calories = Math.max(0, this.calories - 600);
+    }
+    if (this.breaking && this.stress < 55) { this.breaking = false; game.alert(`${this.name} успокоился.`, true); }
+
+    if (this.oxygen <= 0 || this.calories <= -1500 || this.health <= 0) {
+      game.kill(this, this.oxygen <= 0 ? (submerged ? 'утонул' : 'задохнулся')
+        : this.health <= 0 ? 'погиб от травм' : 'умер от голода');
+    }
+  }
+
+  dropJob(game) {
+    if (this.job) game.board.claimed.delete(this.job.key);
+    this.job = null; this.plan = []; this.path = null;
+  }
+
+  // -------------------------------------------------------------- поведение
+  think(world, game) {
+    if (this.plan.length) return;
+
+    if (this.breaking) {
+      if (this.breakKind !== 'sulk') this.wander(world);
+      this.stress = Math.max(0, this.stress - 1.2 * 0.016);
+      this.task = 'idle';
+      return;
+    }
+
+    // 0. выбраться из воды
+    if (world.water[this.idx] > 150) { if (this.planEscapeWater(world)) { this.task = 'breathe'; return; } }
+    // 1. воздух
+    if (this.oxygen < 45) { if (this.planBreathe(world)) { this.task = 'breathe'; return; } }
+    // 2. еда
+    if (this.calories < 1500) { if (this.planEat(world, game)) { this.task = 'eat'; return; } }
+    // 3. расписание: сон, гигиена, досуг
+    const block = game.schedule.at(game.cycleT);
+    if (this.stamina < 18 || (block === 'sleep' && this.stamina < 92)) {
+      if (this.planSleep(world, game)) { this.task = 'sleep'; return; }
+    }
+    if (block === 'bath' && (this.hygiene < 90 || this.bladder > 40)) {
+      if (this.bladder > 40 && this.planUse(world, game, 'toilet')) { this.task = 'toilet'; return; }
+      if (this.planUse(world, game, 'wash')) { this.task = 'wash'; return; }
+    }
+    if (block === 'rec' && this.fun < 85 && this.planUse(world, game, 'fun')) { this.task = 'fun'; return; }
+    // 3.5 личные нужды: уборная, гигиена, лечение, досуг
+    if (this.bladder > 75 && this.planUse(world, game, 'toilet')) { this.task = 'toilet'; return; }
+    if (this.hygiene < 40 && this.planUse(world, game, 'wash')) { this.task = 'wash'; return; }
+    if (this.sick && this.health < 75 && this.planUse(world, game, 'med')) { this.task = 'heal'; return; }
+    if (this.fun < 25 && this.planUse(world, game, 'fun')) { this.task = 'fun'; return; }
+
+    // 4. работа
+    if (game.time > this.retryAt) {
+      const got = game.board.assign(world, this, game);
+      if (got) { this.startJob(world, game, got.job, got.path); return; }
+      this.retryAt = game.time + 1.2;
+    }
+    this.task = 'idle';
+    this.wander(world);
+  }
+
+  wander(world) {
+    if (Math.random() < 0.985) return;
+    const goals = new Set();
+    for (let k = 0; k < 12; k++) {
+      const nx = this.x + Math.floor((Math.random() - 0.5) * 14);
+      const ny = this.y + Math.floor((Math.random() - 0.5) * 6);
+      if (world.inside(nx, ny) && world.standable(nx, ny)) goals.add(ny * W + nx);
+    }
+    const p = findPath(world, this.x, this.y, goals, 1500);
+    if (p) this.plan = [{ go: p }];
+  }
+
+  planEscapeWater(world) {
+    const goals = new Set();
+    for (let y = Math.max(1, this.y - 12); y < this.y + 4; y++)
+      for (let x = Math.max(1, this.x - 16); x < this.x + 16; x++) {
+        if (!world.inside(x, y)) continue;
+        const i = y * W + x;
+        if (world.water[i] < 60 && world.standable(x, y) && world.o2[i] > BREATH_MIN) goals.add(i);
+      }
+    const p = goals.size ? findPath(world, this.x, this.y, goals) : null;
+    if (!p) return false;
+    this.dropJobSoft();
+    this.plan = [{ go: p }];
+    return true;
+  }
+
+  dropJobSoft() { this.plan = []; }
+
+  planBreathe(world) {
+    const goals = new Set();
+    let best = Infinity;
+    for (let y = Math.max(1, this.y - 20); y < Math.min(world.o2.length / W - 1, this.y + 20); y++) {
+      for (let x = Math.max(1, this.x - 30); x < this.x + 30; x++) {
+        if (!world.inside(x, y)) continue;
+        const i = y * W + x;
+        if (world.o2[i] > BREATH_MIN * 2.5 && world.standable(x, y)) {
+          const d = Math.abs(x - this.x) + Math.abs(y - this.y);
+          if (d < best) { best = d; goals.clear(); goals.add(i); }
+        }
+      }
+    }
+    const p = goals.size ? findPath(world, this.x, this.y, goals) : null;
+    if (!p) return false;
+    this.plan = [{ go: p }, { act: () => this.oxygen > 92, label: 'breathe' }];
+    return true;
+  }
+
+  planEat(world, game) {
+    const found = reachableResource(world, 'meal', this) || reachableResource(world, 'food', this);
+    if (!found) return false;
+    const src = found.src, res = (src.from ? src.from.store.meal : world.items.get(src.pileIdx)?.meal) ? 'meal' : 'food';
+    const steps = [{ go: found.path },
+      { act: () => { this.takeFrom(world, src, res, 1000); return true; } }];
+    // поесть за столом, если он есть и рядом
+    const table = game.findBuilding('table', this);
+    if (table) steps.push({ go: null, goals: accessCells(world, table.x, table.y) });
+    steps.push({ act: (dt) => {
+      if (!this.carry) return true;
+      const quality = this.carry.res === 'meal' ? 1.35 : 1;
+      const bite = Math.min(this.carry.amt, 900 * dt);
+      this.carry.amt -= bite;
+      this.calories = Math.min(this.maxCalories, this.calories + bite * quality);
+      if (this.carry.res === 'food' && world.germs[this.idx] > 50) this.germs.food += 0.02 * dt;
+      if (this.carry.amt <= 0.01 || this.calories >= this.maxCalories - 10) {
+        this.diet.push(this.carry.res);
+        if (this.diet.length > 4) this.diet.shift();
+        if (this.carry.res === 'meal') this.remember('ateGood');
+        if (this.diet.length >= 4 && this.diet.every(d => d === this.diet[0])) this.remember('ateSame');
+        if (this.carry.amt > 0.01) world.addItem(this.x, this.y, this.carry.res, this.carry.amt);
+        this.carry = null; return true;
+      }
+      return false;
+    }, label: 'eat' });
+    this.plan = steps;
+    return true;
+  }
+
+  planSleep(world, game) {
+    let bed = game.claimBed(this);
+    const goals = bed ? accessCells(world, bed.x, bed.y) : null;
+    if (goals) {
+      const p = findPath(world, this.x, this.y, goals);
+      if (p) {
+        this.plan = [{ go: p }, { act: () => { if (this.stamina > 97) { this.remember('slept'); return true; } return false; }, label: 'sleep' }];
+        return true;
+      }
+    }
+    if (this.stamina < 6) {
+      this.remember('sleptFloor');
+      this.plan = [{ act: () => this.stamina > 60, label: 'sleep' }];
+      return true;
+    }
+    return false;
+  }
+
+  /** Универсальный поход к бытовому зданию: уборная, умывальник, медкойка, автомат. */
+  planUse(world, game, kind) {
+    const match = st => kind === 'toilet' ? st.def.toilet
+      : kind === 'wash' ? st.def.wash
+      : kind === 'med' ? st.def.med
+      : st.def.fun;
+    let best = null, bd = Infinity;
+    for (const [, st] of world.bdata) {
+      if (!st.built || !match(st) || st.busy) continue;
+      if (kind === 'fun' && st.def.power < 0 && !st.powered) continue;
+      const d = Math.abs(st.x - this.x) + Math.abs(st.y - this.y);
+      if (d < bd) { bd = d; best = st; }
+    }
+    if (!best) return false;
+    const p = findPath(world, this.x, this.y, accessCells(world, best.x, best.y));
+    if (!p) return false;
+    best.busy = this;
+    const use = (dt) => {
+      best.busy = this;
+      const i = best.y * W + best.x;
+      if (kind === 'toilet') {
+        this.bladder = Math.max(0, this.bladder - 60 * dt);
+        this.hygiene = Math.max(0, this.hygiene - 8 * dt);
+        if (this.bladder <= 0) {
+          best.uses = (best.uses || 0) + 1;
+          if ((best.store.dirt || 0) > 5) best.store.dirt -= 5;
+          world.addItem(best.x, best.y, 'pdirt', 6);
+          world.germs[i] += 60;
+          best.busy = null; return true;
+        }
+      } else if (kind === 'wash') {
+        const need = best.def.net?.liquid ? (best.store.water || 0) > 0.5 : true;
+        if (!need) { best.busy = null; return true; }
+        if (best.store.water) best.store.water -= 5 * dt;
+        this.hygiene = Math.min(100, this.hygiene + 45 * dt);
+        this.germs.food *= 1 - 1.2 * dt;
+        this.germs.slimelung *= 1 - 0.5 * dt;
+        world.germs[i] += 4 * dt;
+        if (this.hygiene >= 99) { best.busy = null; return true; }
+      } else if (kind === 'med') {
+        this.onMedCot = true;
+        this.health = Math.min(100, this.health + 3 * dt);
+        this.stamina = Math.min(100, this.stamina + 0.5 * dt);
+        if (!this.sick && this.health > 95) { this.onMedCot = false; best.busy = null; return true; }
+      } else {
+        this.fun = Math.min(100, this.fun + 12 * dt);
+        this.stress = Math.max(0, this.stress - 3 * dt);
+        if (this.fun >= 85) { best.busy = null; return true; }
+      }
+      return false;
+    };
+    this.plan = [{ go: p }, { act: use, label: kind === 'toilet' ? 'toilet' : kind === 'wash' ? 'wash' : kind === 'med' ? 'heal' : 'fun' }];
+    return true;
+  }
+
+  startJob(world, game, job, path) {
+    this.job = job;
+    this.task = job.type;
+    const steps = [];
+    if (job.type === 'supply' || job.type === 'haul') {
+      if (job.type === 'haul') {
+        const target = reachableStorage(world, job.res, this);
+        if (!target) { game.board.postpone(job, game.time + 20); this.dropJob(game); return; }
+        steps.push({ go: path });
+        steps.push({ act: () => { this.takeFrom(world, { x: job.x, y: job.y, pileIdx: job.y * W + job.x }, job.res, 100); return true; } });
+        steps.push({ goals: accessCells(world, target.bin.x, target.bin.y) });
+        steps.push({ act: () => { this.deposit(world, target.bin); return true; } });
+      } else {
+        const found = reachableResource(world, job.res, this);
+        if (!found) { game.board.postpone(job, game.time + 20); this.dropJob(game); return; }
+        const src = found.src;
+        steps.push({ go: found.path });
+        steps.push({ act: () => { this.takeFrom(world, src, job.res, job.amount); return true; } });
+        steps.push({ goals: accessCells(world, job.x, job.y) });
+        steps.push({ act: () => { this.deliverToSite(world, job); return true; } });
+      }
+    } else if (job.type === 'dig') {
+      steps.push({ go: path });
+      steps.push({ act: (dt) => {
+        if (!world.mat[job.y * W + job.x]) return true;
+        const done = world.mine(job.x, job.y, this.workRate('dig') * dt * 4);
+        this.gain('dig', dt);
+        return done;
+      }, label: 'dig' });
+    } else if (job.type === 'build') {
+      steps.push({ go: path });
+      steps.push({ act: (dt) => {
+        const st = world.bdata.get(job.k);
+        if (!st || st.built) return true;
+        st.prog += this.workRate('build') * dt * 3;
+        this.gain('build', dt);
+        if (st.prog >= st.def.work) { st.built = true; st.prog = st.def.work; return true; }
+        return false;
+      }, label: 'build' });
+    } else if (job.type === 'deconstruct') {
+      steps.push({ go: path });
+      steps.push({ act: (dt) => {
+        const st = world.bdata.get(job.k);
+        if (!st) return true;
+        st.prog -= this.workRate('build') * dt * 4;
+        if (st.prog <= 0) { world.removeBuilding(job.x, job.y); return true; }
+        return false;
+      }, label: 'deconstruct' });
+    } else if (job.type === 'harvest') {
+      steps.push({ go: path });
+      steps.push({ act: (dt) => {
+        const st = world.bdata.get(job.k);
+        if (!st || st.growth < 1) return true;
+        st.growth = 0; st.planted = true;
+        const crop = PLANTS[st.plant] || { yield: 'food', amount: 18 };
+        world.addItem(job.x, job.y, crop.yield, crop.amount + this.skills.farm * 3);
+        this.gain('farm', 1);
+        return true;
+      }, label: 'harvest' });
+    } else if (job.type === 'hunt') {
+      steps.push({ go: path });
+      steps.push({ act: (dt) => {
+        const c = game.critters.find(k => k.id === job.cid);
+        if (!c || c.dead) return true;
+        if (Math.abs(c.x - this.x) + Math.abs(c.y - this.y) > 2) return true;   // убежал — новая задача
+        c.hp = (c.hp ?? 10) - this.workRate('dig') * dt * 4;
+        if (c.hp <= 0) {
+          c.dead = true;
+          world.addItem(c.x, c.y, 'food', c.def.meat);
+          game.alert(`${this.name} добыл ${c.def.name.toLowerCase()}а.`, true);
+          return true;
+        }
+        return false;
+      }, label: 'hunt' });
+    } else if (job.type === 'cook') {
+      steps.push({ go: path });
+      steps.push({ act: (dt) => {
+        const st = world.bdata.get(job.k);
+        if (!st || (st.store.food || 0) < 5) return true;
+        st.cookProg = (st.cookProg || 0) + this.workRate('build') * dt * 2;
+        if (st.cookProg >= 10) {
+          st.cookProg = 0;
+          st.store.food -= 5;
+          world.addItem(job.x, job.y, 'meal', 5);
+          this.gain('farm', 1);
+          return true;
+        }
+        return false;
+      }, label: 'cook' });
+    } else if (job.type === 'research') {
+      steps.push({ go: path });
+      steps.push({ act: (dt) => {
+        const st = world.bdata.get(job.k);
+        if (!st || !st.powered || !game.research.current) return true;
+        game.research.progress += this.workRate('build') * dt * 1.4;
+        this.gain('build', dt * 0.5);
+        return game.research.check();
+      }, label: 'research' });
+    } else if (job.type === 'operate') {
+      steps.push({ go: path });
+      steps.push({ act: (dt) => {
+        const st = world.bdata.get(job.k);
+        if (!st || !st.built) return true;
+        st.operating = 0.6;
+        this.stamina -= 3 * dt;
+        return game.power.deficit <= 0 || this.stamina < 12;
+      }, label: 'operate' });
+    }
+    this.plan = steps;
+  }
+
+  prioOf(type) { return this.prio[type] ?? 3; }
+
+  // --- социальное -----------------------------------------------------------
+  opinion(other) { return this.rel.get(other.id) || 0; }
+  addOpinion(other, d) {
+    this.rel.set(other.id, Math.max(-100, Math.min(100, this.opinion(other) + d)));
+  }
+  relationTo(other) { return relationLabel(this.opinion(other)); }
+
+  remember(key) {
+    const t = THOUGHTS[key];
+    if (!t) return;
+    const old = this.memories.find(m => m.key === key);
+    if (old) { old.left = t.dur; return; }
+    this.memories.push({ key, text: t.text, value: t.value, left: t.dur });
+  }
+
+  workRate(skill) {
+    const passion = 1 + (this.passions[skill] || 0) * 0.12;
+    return this.skills[skill] * this.workMul * passion * (0.6 + this.mood / 250);
+  }
+  gain(skill, dt) {
+    this.xp[skill] += dt * (1 + (this.passions[skill] || 0) * 0.6);
+    const lvl = 1 + Math.sqrt(this.xp[skill]) * 0.22;
+    this.skills[skill] = Math.max(this.skills[skill], lvl);
+  }
+
+  takeFrom(world, src, res, amount) {
+    let got = 0;
+    if (src.from && src.from.store) {
+      got = Math.min(src.from.store[res] || 0, amount);
+      src.from.store[res] -= got;
+      if (src.from.store[res] <= 1e-6) delete src.from.store[res];
+    } else {
+      got = world.takeItem(src.pileIdx ?? (src.y * W + src.x), res, amount);
+    }
+    if (got > 0) this.carry = { res, amt: got };
+    this.gain('haul', 0.3);
+  }
+
+  deposit(world, bin) {
+    if (!this.carry) return;
+    const used = Object.values(bin.store).reduce((a, b) => a + b, 0);
+    const room = Math.max(0, bin.def.cap - used);
+    const put = Math.min(room, this.carry.amt);
+    bin.store[this.carry.res] = (bin.store[this.carry.res] || 0) + put;
+    this.carry.amt -= put;
+    if (this.carry.amt > 0.01) world.addItem(this.x, this.y, this.carry.res, this.carry.amt);
+    this.carry = null;
+  }
+
+  deliverToSite(world, job) {
+    if (!this.carry) return;
+    const st = world.bdata.get(job.k);
+    if (!st) { world.addItem(this.x, this.y, this.carry.res, this.carry.amt); this.carry = null; return; }
+    if (!st.built) {
+      st.delivered = st.delivered || {};
+      const need = Math.max(0, (st.def.cost[this.carry.res] || 0) - (st.delivered[this.carry.res] || 0));
+      const put = Math.min(need, this.carry.amt);
+      st.delivered[this.carry.res] = (st.delivered[this.carry.res] || 0) + put;
+      if (this.carry.amt - put > 0.01) world.addItem(this.x, this.y, this.carry.res, this.carry.amt - put);
+    } else if (st.def.farm) {
+      st.store[this.carry.res] = (st.store[this.carry.res] || 0) + this.carry.amt;
+      if (this.carry.res === 'ice') { st.store.water = (st.store.water || 0) + this.carry.amt; delete st.store.ice; }
+      if (!st.planted) { st.planted = true; st.growth = 0; }
+    } else {
+      st.store[this.carry.res] = (st.store[this.carry.res] || 0) + this.carry.amt;
+    }
+    this.carry = null;
+  }
+
+  // ---------------------------------------------------------------- шаг ИИ
+  update(world, game, dt) {
+    this.updateNeeds(world, game, dt);
+    if (this.dead) return;
+    this.think(world, game);
+
+    const step = this.plan[0];
+    if (!step) { this.settle(world, dt); return; }
+
+    if (step.goals && !step.go) {
+      const p = findPath(world, this.x, this.y, step.goals);
+      if (!p) {
+        game.board.postpone(this.job, game.time + 15);
+        this.dropJob(game); this.retryAt = game.time + 1;
+        return;
+      }
+      step.go = p;
+    }
+    if (step.go) {
+      if (this.follow(world, step.go, dt)) { this.plan.shift(); }
+      this.task = this.job ? this.job.type : (step.label || this.task);
+      return;
+    }
+    if (step.act) {
+      this.task = step.label || this.task;
+      if (step.act(dt)) {
+        this.plan.shift();
+        if (!this.plan.length && this.job) { game.board.claimed.delete(this.job.key); this.job = null; }
+      }
+    }
+    this.settle(world, dt);
+  }
+
+  /** Гравитация и сглаживание позиции, когда дупликант не идёт. */
+  settle(world, dt) {
+    if (!world.standable(this.x, this.y) && !world.solid(this.x, this.y + 1)) {
+      this.y++;
+      this.fallFrom = this.fallFrom ?? this.y - 1;
+    } else if (this.fallFrom !== undefined) {
+      const h = this.y - this.fallFrom;
+      if (h > 4) { this.health -= (h - 4) * 7; this.remember('fell'); }
+      this.fallFrom = undefined;
+    }
+    this.px += (this.x - this.px) * Math.min(1, dt * 12);
+    this.py += (this.y - this.py) * Math.min(1, dt * 12);
+  }
+
+  follow(world, path, dt) {
+    if (!path.length) return true;
+    const n = path[0];
+    if (world.solid(n.x, n.y)) { this.plan = []; this.path = null; return true; }
+    const dx = n.x - this.px, dy = n.y - this.py;
+    const d = Math.hypot(dx, dy);
+    const climbing = world.climbable(this.x, this.y) || world.climbable(n.x, n.y);
+    const v = this.speed * (climbing && Math.abs(dy) > 0.1 ? 0.65 : 1) * (this.mood < 35 ? 0.8 : 1);
+    const stepLen = v * dt;
+    if (d <= stepLen + 1e-4) {            // доходим ровно до узла, без «перелёта»
+      this.px = n.x; this.py = n.y; this.x = n.x; this.y = n.y;
+      path.shift();
+      if (Math.abs(dx) > 0.05) this.facing = dx > 0 ? 1 : -1;
+      this.anim += dt * 9;
+      return path.length === 0;
+    }
+    this.px += (dx / d) * stepLen;
+    this.py += (dy / d) * stepLen;
+    if (Math.abs(dx) > 0.05) this.facing = dx > 0 ? 1 : -1;
+    this.x = Math.round(this.px); this.y = Math.round(this.py);
+    this.anim += dt * 9;
+    this.path = path;
+    return false;
+  }
+
+  statusText() { return JOB_LABEL[this.task] || this.task; }
+}
+
+// ===== game.js =====================================================
+// Игровой цикл: время, энергия, работа зданий, колонисты, события.
+
+
+
+
+
+
+
+
+
+
+
+
+
+const CYCLE = 600;      // секунд на цикл
+const GROW_TIME = 150;         // секунд до урожая
+
+class Game {
+  constructor(seed) {
+    this.world = new World(seed);
+    this.rng = makeRNG((seed || 7) * 2654435761 % 4294967295);
+    this.board = new JobBoard();
+    this.pawns = [];
+    this.time = 0; this.cycle = 1; this.cycleT = 0;
+    this.speed = 1; this.selected = null; this.hover = null; this.drag = null;
+    this.alerts = []; this.decor = 0;
+    this.power = { gen: 0, demand: 0, deficit: 0, stored: 0, cap: 0 };
+    this.nets = new Networks();
+    this.research = new Research(this);
+    this.schedule = new Schedule();
+    this.rooms = []; this.roomsAt = 0;
+    this.world.netDirty = true;
+    this.rebuildAt = 0; this.gameOver = false; this.warnAt = 20;
+
+    this.critters = populate(this.world, this.rng);
+    const s = this.world.start;
+    for (let i = 0; i < 3; i++) this.spawnPawn(s.x - 1 + i, s.y);
+    // стартовые припасы прямо на полу базы
+    this.world.addItem(s.x - 3, s.y, 'stone', 120);
+    this.world.addItem(s.x + 3, s.y, 'copper', 80);
+    this.world.addItem(s.x - 4, s.y, 'dirt', 60);
+    this.world.addItem(s.x + 4, s.y, 'algae', 80);
+    this.world.addItem(s.x, s.y, 'food', 20000);
+    this.alert('Колония высажена. Копайте, стройте, дышите.', true);
+  }
+
+  spawnPawn(x, y) {
+    const w = this.world;
+    let ty = y;
+    while (ty < H - 2 && !w.standable(x, ty)) ty++;
+    const p = new Pawn(w, x, ty, this.rng);
+    this.pawns.push(p);
+    return p;
+  }
+
+  alert(text, info = false) {
+    this.alerts.push({ text, info, t: this.time });
+    if (this.alerts.length > 4) this.alerts.shift();
+  }
+
+  kill(pawn, cause) {
+    if (pawn.dead) return;
+    pawn.dead = true;
+    pawn.dropJob(this);
+    this.pawns = this.pawns.filter(p => p !== pawn);
+    if (pawn.bed) pawn.bed.owner = null;
+    this.alert(`${pawn.name} ${cause}.`);
+    for (const p of this.pawns) if (p.opinion(pawn) > 20) p.remember('friendDied');
+    if (!this.pawns.length) { this.gameOver = true; this.speed = 0; this.alert('Колония погибла. F5 — новая попытка.'); }
+  }
+
+  findBuilding(key, near) {
+    let best = null, bd = Infinity;
+    for (const [, st] of this.world.bdata) {
+      if (!st.built || st.def.key !== key) continue;
+      const d = near ? Math.abs(st.x - near.x) + Math.abs(st.y - near.y) : 0;
+      if (d < bd) { bd = d; best = st; }
+    }
+    return best;
+  }
+
+  claimBed(pawn) {
+    if (pawn.bed && pawn.bed.built && pawn.bed.owner === pawn) return pawn.bed;
+    for (const [, st] of this.world.bdata) {
+      if (!st.built || !st.def.sleep || (st.owner && st.owner !== pawn && !st.owner.dead)) continue;
+      st.owner = pawn; pawn.bed = st; return st;
+    }
+    return null;
+  }
+
+  stock(res) { return countResource(this.world, res); }
+
+  // ---------------------------------------------------------------- энергия
+  // -------------------------------------------------------------- устройства
+  updateBuildings(dt) {
+    if (this.world.netDirty) this.nets.rebuild(this.world);
+    updateAutomation(this.world, this.nets, dt);
+    const burnedBefore = this.power.burned || 0;
+    updatePower(this.world, this.nets, dt, this.power);
+    if ((this.power.burned || 0) > burnedBefore) this.alert('Провод перегорел от перегрузки!');
+    updateMachines(this.world, this.nets, this, dt);
+
+    this.decor = 0;
+    for (const [, st] of this.world.bdata) {
+      if (!st.built) continue;
+      const i = this.world.idx(st.x, st.y);
+      if (st.def.decor) this.decor += st.def.decor * 0.4;
+      // перегрев: машина в жаре ломается и требует ремонта
+      if (st.def.power && this.world.temp[i] > 75) {
+        st.overheat = (st.overheat || 0) + dt;
+        if (st.overheat > 20) {
+          st.overheat = 0; st.built = false; st.prog = st.def.work * 0.4;
+          this.alert(`${st.def.name} вышел из строя от перегрева.`);
+        }
+      } else st.overheat = 0;
+      if (st.def.farm && st.planted && st.growth < 1) {
+        if (!st.plant) st.plant = chooseCrop(this.world, i);
+        const c = checkPlant(this.world, st, i);
+        st.wilt = c.ok ? null : c.reason;
+        if (c.ok) {
+          st.store[c.res] = Math.max(0, st.store[c.res] - c.rate * dt);
+          if (c.plant.water > 0) st.store.water = Math.max(0, (st.store.water || 0) - c.plant.water * dt * 0.1);
+          const air = this.world.o2[i] > 0.05 ? 1 : 0.4;
+          st.growth = Math.min(1, st.growth + dt / c.plant.time * air);
+        }
+      }
+    }
+    this.decor = Math.min(20, this.decor);
+  }
+
+  // ------------------------------------------------------------------- тик
+  update(realDt) {
+    if (this.gameOver) return;
+    const steps = this.speed;
+    if (!steps) return;
+    const dt = Math.min(0.05, realDt) * (steps >= 3 ? 1 : 1);
+    const iters = steps >= 3 ? 3 : steps;
+    for (let k = 0; k < iters; k++) this.tick(dt);
+  }
+
+  tick(dt) {
+    this.time += dt;
+    const c = Math.floor(this.time / CYCLE) + 1;
+    if (c !== this.cycle) {
+      this.cycle = c;
+      this.onNewCycle();
+    }
+    this.cycleT = (this.time % CYCLE) / CYCLE;
+
+    stepFluids(this.world, dt);
+    this.updateVents(dt);
+    if (Math.floor(this.time * 2) % 4 === 0) stepLight(this.world);
+
+    this.updateBuildings(dt);
+
+    if (this.time > this.roomsAt) {
+      for (const [, st] of this.world.bdata) st.room = null;
+      this.rooms = findRooms(this.world);
+      this.roomsAt = this.time + 5;
+      this.spoilFood(5);
+    }
+    if (this.time > this.rebuildAt) { this.board.rebuild(this.world, this); this.rebuildAt = this.time + 0.7; }
+    for (const p of [...this.pawns]) p.update(this.world, this, dt);
+    stepSocial(this, dt);
+    this.checkWarnings();
+    for (const c of this.critters) c.update(this.world, this, dt);
+    if (this.critters.some(c => c.dead)) this.critters = this.critters.filter(c => !c.dead);
+  }
+
+  /** Гейзеры: периодически выбрасывают пар, воду, CO₂ или водород. */
+  updateVents(dt) {
+    const w = this.world;
+    for (const v of w.vents) {
+      v.t += dt;
+      if (!v.active && v.t > v.period) { v.active = true; v.t = 0; }
+      if (v.active && v.t > v.period * 0.35) { v.active = false; v.t = 0; }
+      if (!v.active) continue;
+      const i = w.idx(v.x, v.y);
+      if (w.mat[i]) continue;
+      const r = v.rate * dt;
+      if (v.type === 'steam') { w.steam[i] += r * 0.15; w.temp[i] = Math.min(400, w.temp[i] + r * 25); }
+      else if (v.type === 'water') { w.water[i] += r * 9; w.temp[i] += (60 - w.temp[i]) * Math.min(1, r * 0.2); }
+      else if (v.type === 'co2') { w.co2[i] += r * 0.12; w.temp[i] += r * 4; }
+      else { w.h2[i] += r * 0.06; w.temp[i] += r * 12; }
+    }
+  }
+
+  /** Еда на полу портится; в работающем холодильнике — нет. */
+  spoilFood(dt) {
+    const w = this.world;
+    for (const [i, pile] of [...w.items]) {
+      for (const res of ['food', 'meal']) {
+        if (!pile[res]) continue;
+        const loss = pile[res] * 0.00006 * dt;   // ~3.5% за цикл на полу
+        pile[res] -= loss;
+        w.germs[i] += loss * 2;
+        if (loss > 0.5) w.addItem(i % W, (i / W) | 0, 'pdirt', loss * 0.2);
+        if (pile[res] <= 0.01) delete pile[res];
+      }
+      if (!Object.keys(pile).length) w.items.delete(i);
+    }
+    for (const [, st] of w.bdata) {
+      if (!st.built || st.def.store !== 'food') continue;
+      if (st.chilled) continue;                       // холодильник под током
+      for (const res of ['food', 'meal']) {
+        if (!st.store[res]) continue;
+        st.store[res] *= 1 - 0.00002 * dt;       // в тёплом шкафу портится медленно
+        if (st.store[res] < 0.01) delete st.store[res];
+      }
+    }
+  }
+
+  roomOf(x, y) { return roomAt(this.rooms, x, y); }
+
+  /** Случайные события: как у рассказчика в RimWorld, но по-астероидному. */
+  rollEvent() {
+    const r = this.rng();
+    const w = this.world;
+    if (r < 0.18) {
+      // извержение: один из гейзеров просыпается надолго
+      const v = w.vents[Math.floor(this.rng() * w.vents.length)];
+      if (v) { v.active = true; v.t = 0; v.rate *= 1.8; this.alert(`Извержение ${v.type}-жерла на ${v.x},${v.y}!`); }
+    } else if (r < 0.34) {
+      // вспышка болезни: споры в воздухе базы
+      const s = w.start, i = w.idx(s.x, s.y);
+      w.germs[i] += 800;
+      this.alert('Вспышка спор в базе — проветривайте и мойтесь!');
+    } else if (r < 0.5) {
+      // метеоритный дождь по поверхности
+      for (let n = 0; n < 12; n++) {
+        const x = 2 + Math.floor(this.rng() * (W - 4));
+        for (let y = 1; y < H - 2; y++) {
+          const i = w.idx(x, y);
+          if (!w.mat[i]) continue;
+          w.mat[i] = 0; w.addItem(x, y, 'copper', 12); w.temp[i] += 120;
+          break;
+        }
+      }
+      this.alert('Метеоритный дождь! На поверхности появились обломки.');
+    } else if (r < 0.62 && this.pawns.length < 12) {
+      const s = this.world.start;
+      const p = this.spawnPawn(s.x, s.y);
+      this.alert(`К шлюзу прибился скиталец: ${p.name}.`, true);
+    }
+  }
+
+  /** Предупреждения: кислород, энергия, еда, болезни. */
+  checkWarnings() {
+    if (this.time < this.warnAt) return;
+    this.warnAt = this.time + 30;
+    const gasping = this.pawns.filter(p => p.oxygen < 45).length;
+    if (gasping) this.alert(`Задыхаются: ${gasping}. Нужен кислород!`);
+    if (this.power.deficit > 0) this.alert(`Не хватает ${Math.round(this.power.deficit)} Вт.`);
+    if (this.stock('food') + this.stock('meal') < 1200 * this.pawns.length)
+      this.alert('Еда на исходе — стройте грядки и кухню.');
+    const sick = this.pawns.filter(p => p.sick).length;
+    if (sick) this.alert(`Больных: ${sick}. Нужны медкойки и гигиена.`);
+  }
+
+  onNewCycle() {
+    this.alert(`Начался цикл ${this.cycle}.`, true);
+    if (this.cycle > 2) this.rollEvent();
+    // «печатный под»: новобранец раз в 3 цикла, если есть еда
+    if (this.cycle % 3 === 0 && this.pawns.length < 12 && this.stock('food') > 1500) {
+      const s = this.world.start;
+      const p = this.spawnPawn(s.x, s.y);
+      this.alert(`Прибыл новый дупликант: ${p.name}!`, true);
+    }
+  }
+
+  // -------------------------------------------------------------- приказы
+  orderDig(x, y) {
+    const w = this.world, i = w.idx(x, y);
+    if (!w.inside(x, y) || !w.mat[i] || w.mat[i] === 8) return;
+    w.dig[i] = 1;
+  }
+  cancel(x, y) {
+    const w = this.world, i = w.idx(x, y);
+    w.dig[i] = 0;
+    for (const st of w.allAt(x, y)) {
+      if (!st.built) {
+        for (const [res, amt] of Object.entries(st.delivered || {})) w.addItem(x, y, res, amt);
+        w.removeBuilding(x, y, st.layer);
+      } else st.remove = false;
+    }
+  }
+  /** Пометить живность на отлов. */
+  orderHunt(x, y) {
+    for (const c of this.critters) if (c.x === x && c.y === y) c.hunted = true;
+  }
+
+  orderDeconstruct(x, y) {
+    for (const st of this.world.allAt(x, y)) if (st.built) st.remove = true;
+  }
+  place(x, y, key) {
+    const def = B_BY_KEY[key];
+    if (!def || !this.world.canPlace(x, y, def)) return false;
+    this.world.place(x, y, def);
+    return true;
+  }
+}
+
+// ===== save.js =====================================================
+// Сохранение и загрузка в localStorage. Большие массивы храним разрежённо.
+
+
+
+const KEY = 'deepcolony.save';
+const FLOATS = ['o2', 'co2', 'steam', 'h2', 'water', 'pwater', 'germs', 'temp', 'digProg'];
+const BYTES = ['mat', 'back', 'dig', 'bid'];
+
+const packSparse = (arr, round = 3) => {
+  const out = [];
+  const f = 10 ** round;
+  for (let i = 0; i < arr.length; i++) if (arr[i]) out.push(i, Math.round(arr[i] * f) / f);
+  return out;
+};
+const unpackSparse = (arr, into) => {
+  into.fill(0);
+  for (let i = 0; i < arr.length; i += 2) into[arr[i]] = arr[i + 1];
+  return into;
+};
+
+function serialize(game) {
+  const w = game.world;
+  const data = {
+    v: 1, seed: w.seed, time: game.time, cycle: game.cycle,
+    world: { floats: {}, bytes: {}, cond: {} },
+    items: [...w.items].map(([i, pile]) => [i, pile]),
+    vents: w.vents,
+    buildings: [...w.bdata.values()].map(st => ({
+      x: st.x, y: st.y, layer: st.layer || 0, key: st.def.key, built: st.built, prog: st.prog,
+      store: st.store, delivered: st.delivered, charge: st.charge, growth: st.growth,
+      planted: st.planted, plant: st.plant, remove: st.remove, on: st.on,
+      threshold: st.threshold, above: st.above,
+    })),
+    pawns: game.pawns.map(p => ({
+      name: p.name, x: p.x, y: p.y, oxygen: p.oxygen, calories: p.calories, stamina: p.stamina,
+      stress: p.stress, health: p.health, bladder: p.bladder, hygiene: p.hygiene, fun: p.fun,
+      mood: p.mood, skills: p.skills, xp: p.xp, passions: p.passions, prio: p.prio,
+      traits: p.traits.map(t => t.key), germs: p.germs, sick: p.sick, suitO2: p.suitO2,
+      memories: p.memories, rel: [...p.rel], color: p.color, diet: p.diet,
+    })),
+    critters: game.critters.map(c => ({ sp: c.sp, x: c.x, y: c.y, hunger: c.hunger, age: c.age, hunted: c.hunted })),
+    research: { done: [...game.research.done], current: game.research.current?.key || null, progress: game.research.progress },
+    schedule: game.schedule.slots,
+  };
+  for (const f of FLOATS) data.world.floats[f] = packSparse(w[f]);
+  for (const b of BYTES) data.world.bytes[b] = packSparse(w[b], 0);
+  for (const k of Object.keys(w.cond)) data.world.cond[k] = packSparse(w.cond[k], 0);
+  return data;
+}
+
+function applySave(game, data) {
+  const w = game.world;
+  for (const f of FLOATS) if (data.world.floats[f]) unpackSparse(data.world.floats[f], w[f]);
+  for (const b of BYTES) if (data.world.bytes[b]) unpackSparse(data.world.bytes[b], w[b]);
+  for (const k of Object.keys(w.cond)) if (data.world.cond[k]) unpackSparse(data.world.cond[k], w.cond[k]);
+
+  w.items.clear();
+  for (const [i, pile] of data.items) w.items.set(i, pile);
+  w.vents = data.vents || [];
+
+  w.bdata.clear();
+  for (const b of data.buildings) {
+    const def = B_BY_KEY[b.key];
+    if (!def) continue;
+    w.bdata.set(w.key(b.x, b.y, b.layer), {
+      def, x: b.x, y: b.y, layer: b.layer, built: b.built, prog: b.prog,
+      store: b.store || {}, delivered: b.delivered, charge: b.charge || 0, growth: b.growth || 0,
+      planted: b.planted, plant: b.plant, remove: b.remove, on: b.on,
+      threshold: b.threshold, above: b.above, powered: false, net: {},
+    });
+  }
+  w.netDirty = true;
+
+  game.pawns = data.pawns.map(d => {
+    const p = new Pawn(w, d.x, d.y, Math.random);
+    Object.assign(p, d, { rel: new Map(d.rel), traits: d.traits.map(k => TRAITS.find(t => t.key === k)).filter(Boolean) });
+    p.px = d.x; p.py = d.y; p.plan = []; p.job = null; p.bed = null;
+    // сбрасываем модификаторы, начисленные случайными чертами в конструкторе
+    p.speed = 3.4; p.lungs = 1; p.appetite = 1; p.stressRate = 1; p.sleepNeed = 1; p.workMul = 1;
+    for (const t of p.traits) t.mod(p);
+    return p;
+  });
+  game.critters = (data.critters || []).map(d => Object.assign(new Critter(d.sp, d.x, d.y), d));
+  game.research.done = new Set(data.research.done);
+  game.research.progress = data.research.progress || 0;
+  if (data.research.current) game.research.select(data.research.current);
+  game.schedule.slots = data.schedule || game.schedule.slots;
+  game.time = data.time; game.cycle = data.cycle;
+  game.board.jobs = []; game.board.claimed.clear(); game.board.bad.clear();
+  return game;
+}
+
+function saveGame(game) {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(serialize(game)));
+    game.alert('Игра сохранена.', true);
+    return true;
+  } catch (e) {
+    game.alert('Не удалось сохранить: ' + e.message);
+    return false;
+  }
+}
+
+function hasSave() {
+  try { return !!localStorage.getItem(KEY); } catch { return false; }
+}
+
+function loadInto(game) {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return false;
+    applySave(game, JSON.parse(raw));
+    game.alert('Игра загружена.', true);
+    return true;
+  } catch (e) {
+    game.alert('Не удалось загрузить: ' + e.message);
+    return false;
+  }
+}
+
+function savedSeed() {
+  try { return JSON.parse(localStorage.getItem(KEY)).seed; } catch { return null; }
+}
+
+// ===== render.js ===================================================
+// Отрисовка в духе Oxygen Not Included: мягкие тайлы, цветные газы, мультяшные дупликанты.
+
+
+
+
+const hash = (x, y) => {
+  let h = (x * 374761393 + y * 668265263) ^ 0x5bf03635;
+  h = (h ^ (h >> 13)) * 1274126177;
+  return ((h ^ (h >> 16)) >>> 0) / 4294967296;
+};
+
+class Renderer {
+  constructor(canvas, world) {
+    this.c = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.world = world;
+    this.cam = { x: world.start.x * TILE, y: world.start.y * TILE, z: 1.6 };
+    this.overlay = 'none';
+    this.resize();
+    window.addEventListener('resize', () => this.resize());
+  }
+
+  resize() {
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    this.c.width = Math.floor(this.c.clientWidth * dpr);
+    this.c.height = Math.floor(this.c.clientHeight * dpr);
+    this.dpr = dpr;
+  }
+
+  screenToTile(sx, sy) {
+    const z = this.cam.z * this.dpr;
+    const wx = (sx * this.dpr - this.c.width / 2) / z + this.cam.x;
+    const wy = (sy * this.dpr - this.c.height / 2) / z + this.cam.y;
+    return { x: Math.floor(wx / TILE), y: Math.floor(wy / TILE) };
+  }
+
+  draw(game) {
+    const { ctx, world } = this;
+    const z = this.cam.z * this.dpr;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#060c10';
+    ctx.fillRect(0, 0, this.c.width, this.c.height);
+    ctx.save();
+    ctx.translate(this.c.width / 2, this.c.height / 2);
+    ctx.scale(z, z);
+    ctx.translate(-this.cam.x, -this.cam.y);
+
+    const halfW = this.c.width / 2 / z, halfH = this.c.height / 2 / z;
+    const x0 = Math.max(0, Math.floor((this.cam.x - halfW) / TILE) - 1);
+    const x1 = Math.min(W - 1, Math.ceil((this.cam.x + halfW) / TILE) + 1);
+    const y0 = Math.max(0, Math.floor((this.cam.y - halfH) / TILE) - 1);
+    const y1 = Math.min(H - 1, Math.ceil((this.cam.y + halfH) / TILE) + 1);
+
+    this.drawSky(ctx, x0, x1, y0, y1, game);
+    this.drawGas(ctx, x0, x1, y0, y1);
+    this.drawLiquid(ctx, x0, x1, y0, y1, game);
+    this.drawTiles(ctx, x0, x1, y0, y1);
+    this.drawConduits(ctx, x0, x1, y0, y1);
+    this.drawBuildings(ctx, x0, x1, y0, y1);
+    this.drawCritters(ctx, game);
+    this.drawItems(ctx, x0, x1, y0, y1);
+    this.drawOrders(ctx, x0, x1, y0, y1);
+    this.drawPawns(ctx, game);
+    this.drawLight(ctx, x0, x1, y0, y1);
+    if (this.overlay !== 'none') this.drawOverlay(ctx, x0, x1, y0, y1, game);
+    this.drawCursor(ctx, game);
+    ctx.restore();
+  }
+
+  /** Фон: космос там, где нет породы вообще, и «задняя стена» биома в выкопанном. */
+  drawSky(ctx, x0, x1, y0, y1, game) {
+    const w = this.world;
+    const night = game.cycleT > 0.75;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = y * W + x;
+        const px = x * TILE, py = y * TILE;
+        const bm = w.back[i];
+        if (!bm) {
+          const k = Math.min(1, y / 16);
+          const c = night ? [10, 16, 40] : [20, 52, 84];
+          ctx.fillStyle = `rgb(${(c[0] * (1 - k) + 6 * k) | 0},${(c[1] * (1 - k) + 14 * k) | 0},${(c[2] * (1 - k) + 22 * k) | 0})`;
+          ctx.fillRect(px, py, TILE, TILE);
+          const h = hash(x, y);
+          if (h > 0.93 && y < 12) {
+            ctx.fillStyle = `rgba(255,255,255,${0.25 + h * 0.5})`;
+            ctx.fillRect(px + h * 12, py + (h * 91 % 12), 1.4, 1.4);
+          }
+          continue;
+        }
+        const def = MATS[bm];
+        const h = hash(x + 7, y - 3);
+        ctx.fillStyle = shade(h > 0.5 ? def.color2 : def.color, 0.34);
+        ctx.fillRect(px, py, TILE, TILE);
+        ctx.fillStyle = 'rgba(0,0,0,.18)';
+        ctx.fillRect(px, py, TILE, 1.5);
+      }
+    }
+  }
+
+  drawTiles(ctx, x0, x1, y0, y1) {
+    const w = this.world;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = y * W + x;
+        const m = w.mat[i];
+        if (!m) continue;
+        const def = MATS[m];
+        const h = hash(x, y);
+        ctx.fillStyle = h > 0.5 ? def.color : def.color2;
+        ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
+        // «зерно» породы
+        ctx.fillStyle = `rgba(0,0,0,${0.06 + h * 0.10})`;
+        ctx.fillRect(x * TILE + (h * 10 | 0), y * TILE + (h * 13 % TILE | 0), 3, 2);
+        // подсветка кромки на границе с пустотой
+        if (!w.mat[(y - 1) * W + x]) {
+          ctx.fillStyle = 'rgba(255,255,255,.16)';
+          ctx.fillRect(x * TILE, y * TILE, TILE, 2.2);
+        }
+        if (!w.mat[i - 1]) { ctx.fillStyle = 'rgba(255,255,255,.06)'; ctx.fillRect(x * TILE, y * TILE, 1.6, TILE); }
+        if (!w.mat[(y + 1) * W + x]) { ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.fillRect(x * TILE, y * TILE + TILE - 2, TILE, 2); }
+        // обводка по границе с пустотой — «блочный» силуэт как в ONI
+        if (!w.mat[i - 1] || !w.mat[i + 1] || !w.mat[i - W] || !w.mat[i + W]) {
+          ctx.strokeStyle = 'rgba(0,0,0,.32)';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(x * TILE + .5, y * TILE + .5, TILE - 1, TILE - 1);
+        }
+        const dp = w.digProg[i];
+        if (dp > 0) {
+          ctx.strokeStyle = `rgba(255,180,60,${0.25 + dp / 20})`;
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          ctx.moveTo(x * TILE + 3, y * TILE + 3 + dp); ctx.lineTo(x * TILE + TILE - 3, y * TILE + TILE - 4);
+          ctx.stroke();
+        }
+      }
+    }
+  }
+
+  drawGas(ctx, x0, x1, y0, y1) {
+    const w = this.world;
+    if (this.overlay === 'gas') return;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = y * W + x;
+        if (w.mat[i]) continue;
+        const o = w.o2[i], c = w.co2[i], st = w.steam[i], h = w.h2[i];
+        if (o + c + st + h < 0.02) continue;
+        const px = x * TILE, py = y * TILE;
+        if (o > 0.02) { ctx.fillStyle = `rgba(120,200,235,${Math.min(0.16, (o / GAS_CAP) * 0.13)})`; ctx.fillRect(px, py, TILE, TILE); }
+        if (c > 0.05) { ctx.fillStyle = `rgba(105,100,95,${Math.min(0.42, (c / GAS_CAP) * 0.38)})`; ctx.fillRect(px, py, TILE, TILE); }
+        if (st > 0.02) { ctx.fillStyle = `rgba(232,240,245,${Math.min(0.6, st * 0.5)})`; ctx.fillRect(px, py, TILE, TILE); }
+        if (h > 0.02) { ctx.fillStyle = `rgba(200,160,235,${Math.min(0.5, h * 0.6)})`; ctx.fillRect(px, py, TILE, TILE); }
+      }
+    }
+  }
+
+  /** Жидкость рисуем уровнем заполнения тайла — видно поверхность и глубину. */
+  drawLiquid(ctx, x0, x1, y0, y1, game) {
+    const w = this.world;
+    const t = game.time;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = y * W + x;
+        const m = w.water[i];
+        if (m < 1 || w.mat[i]) continue;
+        const f = Math.min(1, m / LIQ_FULL);
+        const hgt = Math.max(1.5, f * TILE);
+        const px = x * TILE, py = y * TILE + TILE - hgt;
+        const dirty = w.pwater[i] > 0.4;
+        const hot = w.temp[i] > 60;
+        ctx.fillStyle = dirty ? 'rgba(112,128,70,.78)' : hot ? 'rgba(90,150,200,.75)' : 'rgba(58,124,196,.72)';
+        ctx.fillRect(px, py, TILE, hgt);
+        // блик поверхности с лёгкой волной
+        if (f < 0.98 && w.water[i - W] < 1) {
+          const wave = Math.sin(t * 2 + x * 0.8) * 0.8;
+          ctx.fillStyle = dirty ? 'rgba(180,200,120,.55)' : 'rgba(170,220,255,.55)';
+          ctx.fillRect(px, py + wave, TILE, 1.4);
+        }
+      }
+    }
+  }
+
+  /** Провода и трубы — тонкими линиями, соединяются с соседями. */
+  drawConduits(ctx, x0, x1, y0, y1) {
+    const w = this.world;
+    const styles = { power: ['#d8b25a', 2], liquid: ['#4d9ad6', 3.2], gas: ['#b98ad8', 3.2], auto: ['#7ed957', 1.6] };
+    for (const kind of ['liquid', 'gas', 'power', 'auto']) {
+      const arr = w.cond[kind];
+      const [color, width] = styles[kind];
+      ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineCap = 'round';
+      const off = kind === 'power' ? -4 : kind === 'liquid' ? 0 : kind === 'gas' ? 4 : 6;
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          const i = y * W + x;
+          if (!arr[i]) continue;
+          const st = w.bdata.get(i * 8 + LAYER[kind]);
+          ctx.globalAlpha = st && st.built ? 1 : 0.35;
+          const cx = x * TILE + TILE / 2, cy = y * TILE + TILE / 2 + off;
+          ctx.beginPath();
+          let linked = false;
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const n = (y + dy) * W + (x + dx);
+            if (!arr[n]) continue;
+            linked = true;
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx + dx * TILE / 2, cy + dy * TILE / 2);
+          }
+          if (!linked) { ctx.moveTo(cx - 3, cy); ctx.lineTo(cx + 3, cy); }
+          ctx.stroke();
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  drawCritters(ctx, game) {
+    for (const c of game.critters || []) {
+      const px = c.px * TILE + TILE / 2, py = c.py * TILE + TILE - 3;
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.fillStyle = 'rgba(0,0,0,.28)';
+      ctx.beginPath(); ctx.ellipse(0, 3, 5, 1.8, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = c.def.color;
+      if (c.sp === 'hatch') {
+        roundRect(ctx, -6, -6, 12, 8, 3.4); ctx.fill();
+        ctx.fillStyle = '#2c2119';
+        ctx.fillRect(-4 * c.dir, -4, 1.4, 1.4);
+        ctx.fillRect(-6, 1.5, 2, 2); ctx.fillRect(4, 1.5, 2, 2);
+      } else if (c.sp === 'puft') {
+        ctx.beginPath(); ctx.arc(0, -4, 5, 0, 7); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,.5)';
+        ctx.beginPath(); ctx.arc(-1.6, -5.4, 1.4, 0, 7); ctx.fill();
+      } else {
+        ctx.beginPath();
+        ctx.ellipse(0, -3, 5.5, 3, 0, 0, 7); ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(5 * c.dir, -3); ctx.lineTo(8 * c.dir, -5.5); ctx.lineTo(8 * c.dir, -0.5); ctx.closePath(); ctx.fill();
+      }
+      if (c.hunted) {
+        ctx.strokeStyle = '#ff6b5e'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(0, -3, 8, 0, 7); ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+
+  drawBuildings(ctx, x0, x1, y0, y1) {
+    const w = this.world;
+    for (const [i, st] of w.bdata) {
+      const x = i % W, y = (i / W) | 0;
+      if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+      const px = x * TILE, py = y * TILE, def = st.def;
+      if (!st.built) {
+        ctx.strokeStyle = 'rgba(90,220,235,.85)';
+        ctx.setLineDash([3, 3]); ctx.lineWidth = 1.2;
+        ctx.strokeRect(px + 1.5, py + 1.5, TILE - 3, TILE - 3);
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(70,200,220,.16)';
+        ctx.fillRect(px + 1.5, py + 1.5, TILE - 3, TILE - 3);
+        const frac = st.prog / def.work;
+        if (frac > 0) { ctx.fillStyle = 'rgba(255,180,60,.5)'; ctx.fillRect(px + 2, py + TILE - 4, (TILE - 4) * frac, 2); }
+        ctx.globalAlpha = 0.55;
+        this.icon(ctx, def, px, py, st);
+        ctx.globalAlpha = 1;
+        continue;
+      }
+      if (st.remove) { ctx.fillStyle = 'rgba(255,80,70,.25)'; ctx.fillRect(px, py, TILE, TILE); }
+      this.icon(ctx, def, px, py, st);
+    }
+  }
+
+  icon(ctx, def, px, py, st) {
+    if (def.key === 'tile') {
+      ctx.fillStyle = '#8a7f74'; ctx.fillRect(px, py, TILE, TILE);
+      ctx.fillStyle = 'rgba(255,255,255,.18)'; ctx.fillRect(px, py, TILE, 2);
+      ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.strokeRect(px + .5, py + .5, TILE - 1, TILE - 1);
+      return;
+    }
+    if (def.key === 'ladder') {
+      ctx.strokeStyle = '#c8a06a'; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(px + 4, py); ctx.lineTo(px + 4, py + TILE);
+      ctx.moveTo(px + TILE - 4, py); ctx.lineTo(px + TILE - 4, py + TILE);
+      for (let k = 3; k < TILE; k += 5) { ctx.moveTo(px + 4, py + k); ctx.lineTo(px + TILE - 4, py + k); }
+      ctx.stroke();
+      return;
+    }
+    // корпус устройства
+    ctx.fillStyle = st.powered === false && def.power < 0 ? '#5a4550' : '#3c5b66';
+    roundRect(ctx, px + 1, py + 2, TILE - 2, TILE - 3, 3);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.2)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.font = `${TILE - 5}px serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(def.icon, px + TILE / 2, py + TILE / 2 + 1);
+    if (def.farm && st.planted && st.plant) {
+      ctx.font = `${TILE - 6}px serif`;
+      ctx.fillText(PLANTS[st.plant]?.icon || '🌱', px + TILE / 2, py + TILE / 2 - 4);
+      if (st.wilt) {
+        ctx.fillStyle = '#ff6b5e';
+        ctx.beginPath(); ctx.arc(px + 3, py + 3, 1.8, 0, 7); ctx.fill();
+      }
+    }
+    if (def.farm && st.planted) {
+      const g = Math.min(1, st.growth);
+      ctx.strokeStyle = '#8ada6a'; ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(px + TILE / 2, py + TILE - 2);
+      ctx.lineTo(px + TILE / 2, py + TILE - 2 - g * (TILE - 5));
+      ctx.stroke();
+      if (g >= 1) { ctx.fillStyle = '#ffd35c'; ctx.beginPath(); ctx.arc(px + TILE / 2, py + 3, 2.4, 0, 7); ctx.fill(); }
+    }
+    if (def.power < 0 && st.powered === false) {
+      ctx.fillStyle = '#ff6b5e'; ctx.beginPath(); ctx.arc(px + TILE - 3, py + 3, 1.8, 0, 7); ctx.fill();
+    }
+  }
+
+  drawItems(ctx, x0, x1, y0, y1) {
+    const w = this.world;
+    ctx.font = '9px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const [i, pile] of w.items) {
+      const x = i % W, y = (i / W) | 0;
+      if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+      let k = 0;
+      for (const [res, amt] of Object.entries(pile)) {
+        if (amt < 0.2) continue;
+        const px = x * TILE + 4 + (k % 2) * 7, py = y * TILE + TILE - 5 - ((k / 2) | 0) * 6;
+        ctx.fillStyle = 'rgba(0,0,0,.35)';
+        ctx.beginPath(); ctx.ellipse(px, py + 2, 4.5, 2, 0, 0, 7); ctx.fill();
+        ctx.fillText(RESOURCES[res]?.icon || '•', px, py - 1);
+        k++;
+      }
+    }
+  }
+
+  drawOrders(ctx, x0, x1, y0, y1) {
+    const w = this.world;
+    ctx.lineWidth = 1.4;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = y * W + x;
+        if (!w.dig[i] || !w.mat[i]) continue;
+        ctx.strokeStyle = 'rgba(255,190,70,.9)';
+        const p = x * TILE, q = y * TILE;
+        ctx.beginPath();
+        ctx.moveTo(p + 3, q + 3); ctx.lineTo(p + TILE - 3, q + TILE - 3);
+        ctx.moveTo(p + TILE - 3, q + 3); ctx.lineTo(p + 3, q + TILE - 3);
+        ctx.stroke();
+      }
+    }
+  }
+
+  drawPawns(ctx, game) {
+    for (const p of game.pawns) {
+      const px = p.px * TILE + TILE / 2, py = p.py * TILE + TILE;
+      const walk = p.plan.length && p.plan[0].go ? Math.sin(p.anim) : 0;
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.scale(p.facing, 1);
+      // тень
+      ctx.fillStyle = 'rgba(0,0,0,.3)';
+      ctx.beginPath(); ctx.ellipse(0, 0, 6, 2.2, 0, 0, 7); ctx.fill();
+      // ноги
+      ctx.strokeStyle = '#2d4750'; ctx.lineWidth = 1.8; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(-1.5, -5); ctx.lineTo(-1.5 + walk * 2, -0.5);
+      ctx.moveTo(1.5, -5); ctx.lineTo(1.5 - walk * 2, -0.5);
+      ctx.stroke();
+      // тело
+      ctx.fillStyle = p.color;
+      roundRect(ctx, -4.5, -12, 9, 8, 3.2); ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.lineWidth = 0.8; ctx.stroke();
+      // руки
+      ctx.strokeStyle = p.color; ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(-4, -10); ctx.lineTo(-6 - walk, -6);
+      ctx.moveTo(4, -10); ctx.lineTo(6 + walk, -6);
+      ctx.stroke();
+      // голова
+      ctx.fillStyle = '#cfe9ea';
+      ctx.beginPath(); ctx.arc(0, -16.5, 5.2, 0, 7); ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,.2)'; ctx.lineWidth = 0.8; ctx.stroke();
+      // глаза
+      const asleep = p.task === 'sleep';
+      ctx.fillStyle = '#12262c';
+      if (asleep) {
+        ctx.fillRect(-3, -17, 2.4, 0.9); ctx.fillRect(0.6, -17, 2.4, 0.9);
+      } else {
+        ctx.beginPath(); ctx.arc(-1.8, -17, 1.15, 0, 7); ctx.arc(1.8, -17, 1.15, 0, 7); ctx.fill();
+      }
+      // волосы-хохолок
+      ctx.strokeStyle = p.color; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.moveTo(-1, -21.2); ctx.lineTo(1.5, -23.4); ctx.stroke();
+      ctx.restore();
+
+      // ноша
+      if (p.carry) {
+        ctx.font = '9px serif'; ctx.textAlign = 'center';
+        ctx.fillText(RESOURCES[p.carry.res]?.icon || '•', px + p.facing * 7, py - 9);
+      }
+      // статусные иконки
+      const icons = [];
+      if (p.oxygen < 45) icons.push('😵');
+      if (p.calories < 1200) icons.push('🍗');
+      if (p.stress > 80) icons.push('💢');
+      if (asleep) icons.push('💤');
+      if (icons.length) {
+        ctx.font = '8px serif'; ctx.textAlign = 'center';
+        ctx.fillText(icons.join(''), px, py - 26);
+      }
+      if (game.selected === p) {
+        ctx.strokeStyle = '#ffb43d'; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.ellipse(px, py, 9, 3.2, 0, 0, 7); ctx.stroke();
+      }
+      // имя
+      ctx.font = '5.5px "Trebuchet MS"'; ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(223,243,244,.85)';
+      ctx.fillText(p.name.split(' ')[0], px, py + 7);
+    }
+  }
+
+  drawLight(ctx, x0, x1, y0, y1) {
+    if (this.overlay !== 'none') return;
+    const w = this.world;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = y * W + x;
+        const l = w.light[i];
+        if (l > 0.5) continue;
+        ctx.fillStyle = `rgba(2,8,14,${(0.5 - l) * 0.5})`;
+        ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
+      }
+    }
+  }
+
+  drawOverlay(ctx, x0, x1, y0, y1, game) {
+    const w = this.world;
+    ctx.fillStyle = 'rgba(4,10,14,.55)';
+    ctx.fillRect(x0 * TILE, y0 * TILE, (x1 - x0 + 1) * TILE, (y1 - y0 + 1) * TILE);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = y * W + x;
+        const px = x * TILE, py = y * TILE;
+        if (this.overlay === 'gas') {
+          if (w.mat[i]) continue;
+          if (w.water[i] > 20) {
+            ctx.fillStyle = `rgba(40,110,190,${Math.min(0.9, 0.3 + w.water[i] / LIQ_FULL * 0.6)})`;
+            ctx.fillRect(px, py, TILE, TILE); continue;
+          }
+          const gases = [[w.o2[i], '90,190,235'], [w.co2[i], '150,150,160'], [w.steam[i], '235,240,245'], [w.h2[i], '200,160,235']];
+          gases.sort((a, b) => b[0] - a[0]);
+          if (gases[0][0] < 0.01) continue;
+          ctx.fillStyle = `rgba(${gases[0][1]},${Math.min(0.85, gases[0][0] / GAS_CAP)})`;
+          ctx.fillRect(px, py, TILE, TILE);
+        } else if (this.overlay === 'germs') {
+          const gm = w.germs[i];
+          if (gm < 1) continue;
+          ctx.fillStyle = `rgba(150,220,80,${Math.min(0.75, gm / 300)})`;
+          ctx.fillRect(px, py, TILE, TILE);
+        } else if (this.overlay === 'light') {
+          ctx.fillStyle = `rgba(255,230,140,${w.light[i] * 0.7})`;
+          ctx.fillRect(px, py, TILE, TILE);
+        } else if (this.overlay === 'temp') {
+          const t = w.temp[i];
+          const k = Math.max(0, Math.min(1, (t + 20) / 80));
+          ctx.fillStyle = `rgba(${(k * 255) | 0},${(90 - k * 60) | 0},${((1 - k) * 235) | 0},.6)`;
+          ctx.fillRect(px, py, TILE, TILE);
+        }
+      }
+    }
+    if (this.overlay === 'rooms') {
+      let n = 0;
+      for (const room of game.rooms) {
+        const hue = (n++ * 67) % 360;
+        ctx.fillStyle = `hsla(${hue},70%,55%,.35)`;
+        for (const i of room.tiles) {
+          const x = (i % W) * TILE, y = ((i / W) | 0) * TILE;
+          ctx.fillRect(x, y, TILE, TILE);
+        }
+        const first = room.buildings[0];
+        if (first) {
+          ctx.fillStyle = '#fff'; ctx.font = '6px "Trebuchet MS"'; ctx.textAlign = 'center';
+          ctx.fillText(room.name, first.x * TILE + TILE / 2, first.y * TILE - 3);
+        }
+      }
+    }
+    if (this.overlay === 'power') {
+      for (const [i, st] of w.bdata) {
+        if (!st.built) continue;
+        const x = (i % W) * TILE, y = ((i / W) | 0) * TILE;
+        const p = st.def.power || 0;
+        if (!p && !st.def.storeJ) continue;
+        ctx.fillStyle = p > 0 ? 'rgba(126,217,87,.6)' : st.powered ? 'rgba(255,180,61,.55)' : 'rgba(255,80,70,.6)';
+        ctx.fillRect(x, y, TILE, TILE);
+      }
+    }
+  }
+
+  drawCursor(ctx, game) {
+    const t = game.hover;
+    if (!t || !this.world.inside(t.x, t.y)) return;
+    const sel = game.drag;
+    ctx.lineWidth = 1.4;
+    ctx.strokeStyle = 'rgba(255,255,255,.75)';
+    if (sel) {
+      const ax = Math.min(sel.x, t.x), ay = Math.min(sel.y, t.y);
+      const bx = Math.max(sel.x, t.x), by = Math.max(sel.y, t.y);
+      ctx.fillStyle = 'rgba(255,180,60,.18)';
+      ctx.fillRect(ax * TILE, ay * TILE, (bx - ax + 1) * TILE, (by - ay + 1) * TILE);
+      ctx.strokeRect(ax * TILE + .5, ay * TILE + .5, (bx - ax + 1) * TILE - 1, (by - ay + 1) * TILE - 1);
+    } else {
+      ctx.strokeRect(t.x * TILE + .5, t.y * TILE + .5, TILE - 1, TILE - 1);
+    }
+  }
+}
+
+/** Затемнить hex-цвет: k — доля от исходной яркости. */
+function shade(hex, k) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = ((n >> 16) & 255) * k, g = ((n >> 8) & 255) * k, b = (n & 255) * k;
+  return `rgb(${r | 0},${g | 0},${b | 0})`;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// ===== ui.js =======================================================
+// Интерфейс: панели, инструменты, ввод мыши и клавиатуры.
+
+
+
+
+
+
+
+const TABS = [
+  { name: 'Приказы', tools: [
+    { key: 'select', icon: '🔍', name: 'Осмотр' },
+    { key: 'dig',    icon: '⛏', name: 'Копать' },
+    { key: 'hunt',   icon: '🏹', name: 'Отлов' },
+    { key: 'cancel', icon: '✖',  name: 'Отмена' },
+    { key: 'decon',  icon: '🔨', name: 'Разобрать' },
+  ]},
+  ...Object.entries(CAT).map(([cat, name]) => ({
+    name, tools: BUILDINGS.filter(b => b && b.cat === cat).map(b => b.key),
+  })),
+];
+
+class UI {
+  constructor(game, renderer) {
+    this.game = game; this.r = renderer;
+    this.tab = 0; this.tool = { key: 'select' };
+    this.buildTabs(); this.buildTools();
+    this.bindInput();
+    this.lastUI = 0;
+  }
+
+  // --------------------------------------------------------------- панели
+  buildTabs() {
+    const host = document.getElementById('tabs');
+    host.innerHTML = '';
+    TABS.forEach((t, i) => {
+      const el = document.createElement('div');
+      el.className = 'tab' + (i === this.tab ? ' active' : '');
+      el.textContent = t.name;
+      el.onclick = () => { this.tab = i; this.buildTabs(); this.buildTools(); };
+      host.appendChild(el);
+    });
+  }
+
+  buildTools() {
+    const host = document.getElementById('tools');
+    host.innerHTML = '';
+    for (const t of TABS[this.tab].tools) {
+      const def = typeof t === 'string' ? B_BY_KEY[t] : null;
+      const key = def ? def.key : t.key;
+      const locked = def && !this.game.research.unlocked(def);
+      const el = document.createElement('div');
+      el.className = 'tool' + (this.tool.key === key ? ' active' : '') + (locked ? ' locked' : '');
+      el.title = def ? `${def.name}${locked ? ' — нужно исследование' : ''}` : t.name;
+      el.innerHTML = def
+        ? `<div class="ic">${locked ? '🔒' : def.icon}</div><div class="nm">${def.name}</div>
+           <div class="cost">${Object.entries(def.cost).map(([r, a]) => `${a}${RESOURCES[r].icon}`).join(' ')}</div>`
+        : `<div class="ic">${t.icon}</div><div class="nm">${t.name}</div><div class="cost">&nbsp;</div>`;
+      el.onclick = () => {
+        if (locked) return;
+        this.tool = def ? { key: def.key, build: def } : { key: t.key };
+        this.buildTools();
+      };
+      host.appendChild(el);
+    }
+    document.getElementById('hint').textContent = this.tool.build
+      ? `${this.tool.build.name}: ЛКМ — поставить чертёж (можно протянуть). Материалы принесут дупликанты.`
+      : 'ЛКМ — применить · ПКМ/Esc — отмена инструмента · СКМ — камера · колесо — зум · Space — пауза';
+  }
+
+  // ----------------------------------------------------------------- ввод
+  bindInput() {
+    const c = this.r.c, g = this.game;
+    let panning = false, last = null;
+
+    c.addEventListener('contextmenu', e => e.preventDefault());
+
+    c.addEventListener('pointerdown', e => {
+      c.setPointerCapture?.(e.pointerId);
+      const t = this.r.screenToTile(e.clientX, e.clientY);
+      if (e.button === 1 || e.shiftKey) { panning = true; last = { x: e.clientX, y: e.clientY }; return; }
+      if (e.button === 2) { this.tool = { key: 'select' }; this.buildTools(); g.drag = null; return; }
+      if (this.tool.key === 'select') { this.selectAt(t); return; }
+      g.drag = t;
+    });
+
+    window.addEventListener('pointermove', e => {
+      const t = this.r.screenToTile(e.clientX, e.clientY);
+      g.hover = t;
+      if (panning && last) {
+        this.r.cam.x -= (e.clientX - last.x) / this.r.cam.z;
+        this.r.cam.y -= (e.clientY - last.y) / this.r.cam.z;
+        last = { x: e.clientX, y: e.clientY };
+      }
+    });
+
+    window.addEventListener('pointerup', e => {
+      panning = false;
+      if (!g.drag) return;
+      const t = this.r.screenToTile(e.clientX, e.clientY);
+      this.applyArea(g.drag, t);
+      g.drag = null;
+    });
+
+    let pinch = null;
+    c.addEventListener('touchstart', e => {
+      if (e.touches.length !== 2) return;
+      panning = false; g.drag = null;
+      pinch = this.touchInfo(e);
+    }, { passive: true });
+    c.addEventListener('touchmove', e => {
+      if (e.touches.length !== 2 || !pinch) return;
+      e.preventDefault();
+      const now = this.touchInfo(e);
+      this.r.cam.z = Math.max(0.6, Math.min(4.5, this.r.cam.z * (now.d / pinch.d)));
+      this.r.cam.x -= (now.x - pinch.x) / this.r.cam.z;
+      this.r.cam.y -= (now.y - pinch.y) / this.r.cam.z;
+      pinch = now;
+    }, { passive: false });
+    c.addEventListener('touchend', () => { pinch = null; }, { passive: true });
+
+    c.addEventListener('wheel', e => {
+      e.preventDefault();
+      const k = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      this.r.cam.z = Math.max(0.6, Math.min(4.5, this.r.cam.z * k));
+    }, { passive: false });
+
+    window.addEventListener('keydown', e => {
+      if (e.code === 'Space') { e.preventDefault(); g.speed = g.speed ? 0 : 1; this.syncSpeed(); }
+      if (e.code === 'Escape') { this.tool = { key: 'select' }; this.buildTools(); g.drag = null; }
+      if (e.key === '1') { g.speed = 1; this.syncSpeed(); }
+      if (e.key === '2') { g.speed = 2; this.syncSpeed(); }
+      if (e.key === '3') { g.speed = 3; this.syncSpeed(); }
+      const pan = 40 / this.r.cam.z;
+      if (e.key === 'ArrowLeft' || e.key === 'a') this.r.cam.x -= pan;
+      if (e.key === 'ArrowRight' || e.key === 'd') this.r.cam.x += pan;
+      if (e.key === 'ArrowUp' || e.key === 'w') this.r.cam.y -= pan;
+      if (e.key === 'ArrowDown' || e.key === 's') this.r.cam.y += pan;
+    });
+
+    document.querySelectorAll('.spd[data-speed]').forEach(b => {
+      b.onclick = () => { g.speed = +b.dataset.speed; this.syncSpeed(); };
+    });
+    document.getElementById('btn-save').onclick = () => saveGame(g);
+    document.getElementById('btn-load').onclick = () => { if (hasSave()) loadInto(g); else g.alert('Сохранений нет.'); };
+    document.querySelectorAll('.ov').forEach(b => {
+      b.onclick = () => {
+        document.querySelectorAll('.ov').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        this.r.overlay = b.dataset.ov;
+      };
+    });
+  }
+
+  /** Центр и разброс двух касаний — для панорамы и зума. */
+  touchInfo(e) {
+    const [a, b] = [e.touches[0], e.touches[1]];
+    return {
+      x: (a.clientX + b.clientX) / 2,
+      y: (a.clientY + b.clientY) / 2,
+      d: Math.max(1, Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)),
+    };
+  }
+
+  syncSpeed() {
+    document.querySelectorAll('.spd[data-speed]').forEach(b =>
+      b.classList.toggle('active', +b.dataset.speed === this.game.speed));
+  }
+
+  selectAt(t) {
+    const g = this.game;
+    let best = null, bd = 2.2;
+    for (const p of g.pawns) {
+      const d = Math.hypot(p.px - t.x, p.py - t.y);
+      if (d < bd) { bd = d; best = p; }
+    }
+    g.selected = best;
+  }
+
+  applyArea(a, b) {
+    const g = this.game;
+    const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x);
+    const y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        switch (this.tool.key) {
+          case 'dig': g.orderDig(x, y); break;
+          case 'cancel': g.cancel(x, y); break;
+          case 'decon': g.orderDeconstruct(x, y); break;
+          case 'hunt': g.orderHunt(x, y); break;
+          default: if (this.tool.build) g.place(x, y, this.tool.build.key);
+        }
+      }
+    }
+  }
+
+  // --------------------------------------------------------------- вывод
+  update(dt) {
+    this.lastUI += dt;
+    if (this.lastUI < 0.2) return;
+    this.lastUI = 0;
+    const g = this.game, w = g.world;
+
+    document.getElementById('cycle').textContent =
+      `Цикл ${g.cycle} · ${g.cycleT > 0.75 ? 'ночь' : 'день'} · ${g.pawns.length} дупл.`;
+
+    const res = ['food', 'stone', 'copper', 'dirt', 'coal', 'algae', 'ice'];
+    document.getElementById('resbar').innerHTML =
+      res.map(r => `<div class="r"><i>${RESOURCES[r].icon}</i>${RESOURCES[r].name} <b>${Math.round(g.stock(r))}</b></div>`).join('') +
+      `<div class="r"><i>⚡</i><b>${Math.round(g.power.gen)}</b>/${Math.round(g.power.demand)} Вт · ${(g.power.stored / 1000).toFixed(1)} кДж</div>`;
+
+    // инспектор
+    const t = g.hover;
+    const body = document.getElementById('inspector-body');
+    if (t && w.inside(t.x, t.y)) {
+      const i = w.idx(t.x, t.y);
+      const m = MATS[w.mat[i]];
+      const st = w.bstate(t.x, t.y) || w.allAt(t.x, t.y)[0];
+      const pile = w.items.get(i);
+      const rows = [];
+      rows.push(kv('Тайл', `${t.x}, ${t.y}`));
+      rows.push(kv('Порода', m ? m.name : '—'));
+      rows.push(kv('Кислород', mass(w.o2[i])));
+      rows.push(kv('CO₂', mass(w.co2[i])));
+      rows.push(kv('Пар', mass(w.steam[i])));
+      rows.push(kv('Водород', mass(w.h2[i])));
+      rows.push(kv('Вода', `${w.water[i].toFixed(1)} кг${w.pwater[i] > 0.4 ? ' (грязная)' : ''}`));
+      rows.push(kv('Температура', `${w.temp[i].toFixed(1)} °C`));
+      rows.push(kv('Свет', `${Math.round(w.light[i] * 100)} %`));
+      if (w.germs[i] > 1) rows.push(kv('Микробы', Math.round(w.germs[i])));
+      if (w.dig[i]) rows.push(kv('Приказ', 'копать'));
+      if (st) {
+        rows.push('<div class="sep"></div>');
+        rows.push(kv('Постройка', st.def.name));
+        rows.push(kv('Статус', st.built ? (st.remove ? 'на разбор' : 'работает') : `стройка ${Math.round(st.prog / st.def.work * 100)}%`));
+        if (!st.built) rows.push(kv('Доставлено', Object.entries(st.delivered || {}).map(([r, a]) => `${Math.round(a)} ${RESOURCES[r].name}`).join(', ') || '—'));
+        if (st.def.sensor) {
+          rows.push(kv('Датчик', st.def.sensor === 'manual' ? (st.on !== false ? 'включён' : 'выключен')
+            : `${st.above ?? st.def.above ? '>' : '<'} ${st.threshold ?? st.def.threshold}`));
+          rows.push(kv('Сигнал', st.signal ? 'ДА' : 'нет'));
+        }
+        if (st.autoOff) rows.push(kv('Автоматика', 'выключено сигналом'));
+        if (st.def.power) rows.push(kv('Энергия', `${st.def.power} Вт ${st.def.power < 0 ? (st.powered ? '✅' : '❌') : ''}`));
+        if (st.def.storeJ) rows.push(kv('Заряд', `${(st.charge / 1000).toFixed(1)} кДж`));
+        if (Object.keys(st.store || {}).length)
+          rows.push(kv('Внутри', Object.entries(st.store).map(([r, a]) => `${Math.round(a)} ${RESOURCES[r].name}`).join(', ')));
+        if (st.def.farm) {
+          rows.push(kv('Культура', st.plant ? `${PLANTS[st.plant].icon} ${PLANTS[st.plant].name}` : '—'));
+          rows.push(kv('Рост', st.planted ? `${Math.round(st.growth * 100)}%${st.wilt ? ` (${st.wilt})` : ''}` : 'нужен субстрат'));
+          if (st.plant) rows.push(kv('Требования', PLANTS[st.plant].hint));
+        }
+        for (const kind of ['power', 'liquid', 'gas']) {
+          const id = st.net?.[kind] ?? -1;
+          if (id < 0) continue;
+          const net = g.nets.net(kind, id);
+          const label = kind === 'power' ? 'Электросеть' : kind === 'liquid' ? 'Водопровод' : 'Газопровод';
+          rows.push(kv(label, kind === 'power'
+            ? `${Math.round(net.gen)}/${Math.round(net.demand)} Вт`
+            : Object.entries(net.buffer).map(([r, a]) => `${r} ${a.toFixed(1)}`).join(', ') || 'пусто'));
+        }
+      }
+      const cr = (g.critters || []).find(c => c.x === t.x && c.y === t.y);
+      if (cr) {
+        rows.push('<div class="sep"></div>');
+        rows.push(kv('Существо', cr.def.name));
+        rows.push(kv('Сытость', `${Math.round(cr.hunger / cr.def.hungerMax * 100)}%`));
+        if (cr.hunted) rows.push(kv('Метка', 'на отлов'));
+      }
+      if (pile) {
+        rows.push('<div class="sep"></div>');
+        rows.push(kv('На полу', Object.entries(pile).map(([r, a]) => `${Math.round(a)} ${RESOURCES[r].name}`).join(', ')));
+      }
+      body.innerHTML = rows.join('');
+    }
+
+    // расписание
+    const strip = document.getElementById('schedule-strip');
+    const nowSlot = Math.min(11, Math.floor(g.cycleT * 12));
+    strip.innerHTML = g.schedule.slots.map((k, idx) =>
+      `<div class="${idx === nowSlot ? 'now' : ''}" data-slot="${idx}" title="${BLOCKS[k].name}"
+        style="background:${BLOCKS[k].color}33;border-color:${BLOCKS[k].color}">${BLOCKS[k].icon}</div>`).join('');
+    strip.querySelectorAll('div').forEach(el => {
+      el.onclick = () => { g.schedule.cycle(+el.dataset.slot); this.lastUI = 1; };
+    });
+
+    // исследования
+    const rb = document.getElementById('research-body');
+    const R = g.research;
+    rb.innerHTML = TECHS.map(t => {
+      const done = R.done.has(t.key);
+      const ready = t.req.every(r => R.done.has(r));
+      const cur = R.current?.key === t.key;
+      const pct = cur ? Math.round(R.progress / t.cost * 100) : 0;
+      return `<div class="tech ${done ? 'done' : ''} ${cur ? 'active' : ''}" data-tech="${t.key}">
+        <div><b>${t.name}</b> ${done ? '✔' : ready ? `${t.cost}` : '🔒'}</div>
+        <div class="d">${t.desc}</div>
+        ${cur ? `<div class="bar"><i style="width:${pct}%;background:var(--accent2)"></i></div>` : ''}
+      </div>`;
+    }).join('');
+    rb.querySelectorAll('.tech').forEach(el => {
+      el.onclick = () => { R.select(el.dataset.tech); this.lastUI = 1; };
+    });
+
+    // колонисты
+    const list = document.getElementById('colonist-list');
+    list.innerHTML = g.pawns.map(p => {
+      const sel = g.selected === p;
+      const detail = sel ? `
+        <div class="sep"></div>
+        <div class="blabel"><span>Черты</span></div>
+        <div>${p.traits.map(t => `<b title="${t.desc}">${t.name}</b>`).join(', ')}</div>
+        <div class="blabel"><span>Навыки</span></div>
+        <div>⛏ ${p.skills.dig.toFixed(1)} · 🔨 ${p.skills.build.toFixed(1)} · 🌱 ${p.skills.farm.toFixed(1)} · 📦 ${p.skills.haul.toFixed(1)}</div>
+        <div class="blabel"><span>Настроение</span><span>${Math.round(p.mood)}</span></div>
+        <div>${p.moodFactors.map(f => `<span style="color:${f[1] < 0 ? 'var(--bad)' : 'var(--good)'}">${f[0]} ${f[1] > 0 ? '+' : ''}${f[1]}</span>`).join(' · ')}</div>
+        ${p.sick ? `<div style="color:var(--bad)">Болезнь: ${p.sick.name}</div>` : ''}
+        <div class="blabel"><span>Работы (клик — вкл/выкл)</span></div>
+        <div class="prio">${JOB_ORDER.map(j => {
+          const v = p.prioOf(j);
+          return `<span class="${v === 0 ? 'off' : v >= 5 ? 'p5' : v <= 1 ? 'p1' : ''}" data-pid="${p.id}" data-job="${j}">${JOB_LABEL[j] || j} ${v}</span>`;
+        }).join('')}</div>
+        <div class="blabel"><span>Увлечения</span></div>
+        <div>${Object.entries(p.passions).filter(([, v]) => v).map(([k, v]) => `${v === 2 ? '🔥' : '✨'} ${k}`).join(' · ') || '—'}</div>
+        <div class="blabel"><span>Отношения</span></div>
+        <div class="rel">${g.pawns.filter(q => q !== p).map(q => `${q.name.split(' ')[0]}: ${p.relationTo(q)} (${Math.round(p.opinion(q))})`).join('<br>') || '—'}</div>
+        ${p.suitO2 > 0 ? `<div>Скафандр: ${Math.round(p.suitO2)}%</div>` : ''}
+      ` : '';
+      return `<div class="col-card ${sel ? 'sel' : ''}" data-id="${p.id}">
+        <div class="col-head"><span class="col-name">${p.name}</span><span class="col-task">${p.statusText()}</span></div>
+        ${bar('O₂', p.oxygen, 100, '#68c8e8')}
+        ${bar('Еда', p.calories, 4000, '#e8b95c')}
+        ${bar('Силы', p.stamina, 100, '#8ad86a')}
+        ${bar('Стресс', p.stress, 100, '#e8705c')}
+        ${bar('Здоровье', p.health, 100, '#e86a9a')}
+        ${sel ? bar('Мочевой пузырь', p.bladder, 100, '#c8b45c') + bar('Гигиена', p.hygiene, 100, '#7ec8c8') + bar('Досуг', p.fun, 100, '#c58ae0') : ''}
+        ${detail}
+      </div>`;
+    }).join('') || '<div>Колонистов нет.</div>';
+    list.querySelectorAll('.prio span').forEach(el => {
+      el.onclick = (e) => {
+        e.stopPropagation();
+        const p = g.pawns.find(x => x.id === +el.dataset.pid);
+        if (!p) return;
+        const cur = p.prioOf(el.dataset.job);
+        p.prio[el.dataset.job] = e.shiftKey ? Math.max(0, cur - 1) : (cur + 1) % 6;
+        p.dropJob(g);
+        this.lastUI = 1;
+      };
+    });
+    list.querySelectorAll('.col-card').forEach(el => {
+      el.onclick = () => { g.selected = g.pawns.find(p => p.id === +el.dataset.id); this.lastUI = 1; };
+    });
+
+    // оповещения
+    const al = document.getElementById('alerts');
+    al.innerHTML = g.alerts.filter(a => g.time - a.t < 12)
+      .map(a => `<div class="alert ${a.info ? 'info' : ''}">${a.text}</div>`).join('');
+  }
+}
+
+const kv = (k, v) => `<div class="kv"><span>${k}</span><span>${v}</span></div>`;
+const bar = (label, v, max, color) => {
+  const pct = Math.max(0, Math.min(100, v / max * 100));
+  return `<div class="blabel"><span>${label}</span><span>${Math.round(pct)}%</span></div>
+          <div class="bar"><i style="width:${pct}%;background:${color}"></i></div>`;
+};
+
+// ===== main.js =====================================================
+// Точка входа: создание мира и главный цикл.
+
+
+
+const seed = Number(new URLSearchParams(location.search).get('seed')) || (Date.now() & 0xffff);
+const game = new Game(seed);
+const renderer = new Renderer(document.getElementById('view'), game.world);
+const ui = new UI(game, renderer);
+
+window.game = game;   // для отладки из консоли
+
+let prev = performance.now();
+function frame(now) {
+  const dt = Math.min(0.1, (now - prev) / 1000);
+  prev = now;
+  game.update(dt);
+  renderer.draw(game);
+  ui.update(dt);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

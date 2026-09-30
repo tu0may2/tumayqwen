@@ -3,7 +3,7 @@ import { W, BUILDINGS } from './world.js';
 import { Networks } from './network.js';
 import { LIQ_FULL } from './fluid.js';
 
-const GASES = ['o2', 'co2', 'steam', 'h2'];
+const GAS_KEYS = ['o2', 'co2', 'steam', 'h2'];
 
 /** Энергия считается отдельно для каждой электросети. */
 export function updatePower(world, nets, dt, totals) {
@@ -146,7 +146,7 @@ export function updateMachines(world, nets, game, dt) {
       }
       case 'gpump': {
         if (!st.powered || !gas) break;
-        for (const g of GASES) {
+        for (const g of GAS_KEYS) {
           if (world[g][i] <= 0.005) continue;
           const take = Math.min(world[g][i], 0.5 * dt);
           const moved = Networks.push(gas, g, take);

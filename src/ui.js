@@ -75,7 +75,8 @@ export class UI {
 
     c.addEventListener('contextmenu', e => e.preventDefault());
 
-    c.addEventListener('mousedown', e => {
+    c.addEventListener('pointerdown', e => {
+      c.setPointerCapture?.(e.pointerId);
       const t = this.r.screenToTile(e.clientX, e.clientY);
       if (e.button === 1 || e.shiftKey) { panning = true; last = { x: e.clientX, y: e.clientY }; return; }
       if (e.button === 2) { this.tool = { key: 'select' }; this.buildTools(); g.drag = null; return; }
@@ -83,7 +84,7 @@ export class UI {
       g.drag = t;
     });
 
-    window.addEventListener('mousemove', e => {
+    window.addEventListener('pointermove', e => {
       const t = this.r.screenToTile(e.clientX, e.clientY);
       g.hover = t;
       if (panning && last) {
@@ -93,13 +94,30 @@ export class UI {
       }
     });
 
-    window.addEventListener('mouseup', e => {
+    window.addEventListener('pointerup', e => {
       panning = false;
       if (!g.drag) return;
       const t = this.r.screenToTile(e.clientX, e.clientY);
       this.applyArea(g.drag, t);
       g.drag = null;
     });
+
+    let pinch = null;
+    c.addEventListener('touchstart', e => {
+      if (e.touches.length !== 2) return;
+      panning = false; g.drag = null;
+      pinch = this.touchInfo(e);
+    }, { passive: true });
+    c.addEventListener('touchmove', e => {
+      if (e.touches.length !== 2 || !pinch) return;
+      e.preventDefault();
+      const now = this.touchInfo(e);
+      this.r.cam.z = Math.max(0.6, Math.min(4.5, this.r.cam.z * (now.d / pinch.d)));
+      this.r.cam.x -= (now.x - pinch.x) / this.r.cam.z;
+      this.r.cam.y -= (now.y - pinch.y) / this.r.cam.z;
+      pinch = now;
+    }, { passive: false });
+    c.addEventListener('touchend', () => { pinch = null; }, { passive: true });
 
     c.addEventListener('wheel', e => {
       e.preventDefault();
@@ -132,6 +150,16 @@ export class UI {
         this.r.overlay = b.dataset.ov;
       };
     });
+  }
+
+  /** Центр и разброс двух касаний — для панорамы и зума. */
+  touchInfo(e) {
+    const [a, b] = [e.touches[0], e.touches[1]];
+    return {
+      x: (a.clientX + b.clientX) / 2,
+      y: (a.clientY + b.clientY) / 2,
+      d: Math.max(1, Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)),
+    };
   }
 
   syncSpeed() {
