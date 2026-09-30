@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Deep Colony</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <canvas id="view"></canvas>
+
+  <header id="topbar">
+    <div class="brand">DEEP<span>COLONY</span></div>
+    <div class="res" id="resbar"></div>
+    <div class="clock">
+      <div class="cycle" id="cycle">Цикл 1</div>
+      <div class="speeds">
+        <button id="btn-save" class="spd" title="Сохранить">💾</button>
+        <button id="btn-load" class="spd" title="Загрузить">📂</button>
+        <button data-speed="0" class="spd" title="Пауза (Space)">❚❚</button>
+        <button data-speed="1" class="spd active">▶</button>
+        <button data-speed="2" class="spd">▶▶</button>
+        <button data-speed="3" class="spd">▶▶▶</button>
+      </div>
+    </div>
+  </header>
+
+  <aside id="sidebar">
+    <div class="panel" id="inspector">
+      <div class="panel-title">Инспектор</div>
+      <div class="panel-body" id="inspector-body">Наведите курсор на тайл.</div>
+    </div>
+    <div class="panel" id="schedulep">
+      <div class="panel-title">Расписание цикла</div>
+      <div class="panel-body"><div id="schedule-strip" class="sched"></div>
+        <div class="hint2">Клик по отрезку меняет режим: работа → досуг → гигиена → сон</div></div>
+    </div>
+    <div class="panel" id="researchp">
+      <div class="panel-title">Исследования</div>
+      <div class="panel-body" id="research-body"></div>
+    </div>
+    <div class="panel" id="colonists">
+      <div class="panel-title">Колонисты</div>
+      <div class="panel-body" id="colonist-list"></div>
+    </div>
+  </aside>
+
+  <div id="alerts"></div>
+
+  <footer id="toolbar">
+    <div class="tabs" id="tabs"></div>
+    <div class="tools" id="tools"></div>
+    <div class="hint" id="hint">ЛКМ — применить · ПКМ/Esc — отмена · перетаскивание СКМ — камера · колесо — зум</div>
+  </footer>
+
+  <div id="overlay-toggles">
+    <button data-ov="none" class="ov active">Обзор</button>
+    <button data-ov="gas" class="ov">Газы</button>
+    <button data-ov="temp" class="ov">Тепло</button>
+    <button data-ov="power" class="ov">Энергия</button>
+    <button data-ov="germs" class="ov">Микробы</button>
+    <button data-ov="light" class="ov">Свет</button>
+    <button data-ov="rooms" class="ov">Комнаты</button>
+  </div>
+</div>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
